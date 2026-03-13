@@ -73,10 +73,106 @@ function createGameState() {
     units.push(createUnit('soldier', 33 + i, 15, 'player'));
   }
 
+  // ---- Terrain enrichment precomputation ----
+
+  // fogLit: which tiles are currently in a unit's sight (reset each frame)
+  const fogLit = new Uint8Array(COLS * ROWS);
+  // Pre-lit player start zone
+  for (let r = 0; r < ROWS; r++)
+    for (let c = 27; c < COLS; c++)
+      fogLit[r * COLS + c] = 1;
+
+  // Zone base colors [R, G, B]
+  const _DIRT = [58, 48, 32];
+  const _NEUT = [34, 46, 20];
+  const _GRAS = [42, 58, 26];
+  function _lerp3(a, b, t) {
+    return [Math.round(a[0]+(b[0]-a[0])*t), Math.round(a[1]+(b[1]-a[1])*t), Math.round(a[2]+(b[2]-a[2])*t)];
+  }
+
+  // Per-tile color strings with noise + zone transitions
+  const tileColors = new Array(COLS * ROWS);
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      let base;
+      if      (c <= 8)  base = _DIRT;
+      else if (c <= 12) base = _lerp3(_DIRT, _NEUT, (c - 9) / 4);
+      else if (c <= 24) base = _NEUT;
+      else if (c <= 28) base = _lerp3(_NEUT, _GRAS, (c - 25) / 4);
+      else              base = _GRAS;
+      const noise = (Math.random() * 0.16) - 0.08;
+      const R = Math.max(0, Math.min(255, Math.round(base[0] * (1 + noise))));
+      const G = Math.max(0, Math.min(255, Math.round(base[1] * (1 + noise))));
+      const B = Math.max(0, Math.min(255, Math.round(base[2] * (1 + noise))));
+      tileColors[r * COLS + c] = `rgb(${R},${G},${B})`;
+    }
+  }
+
+  // Road network (Set of tile indices)
+  const roads = new Set();
+  // Main east-west corridor row 14: player base → bridge
+  _markRoad(roads, 35, 14, 15, 14);
+  // Misgav (23,13) spur north to main corridor
+  _markRoad(roads, 23, 13, 23, 14);
+  // Kerem (17,7) → down to corridor row 14
+  _markRoad(roads, 17, 7, 17, 14);
+  // Havela (19,19) → up to corridor row 14
+  _markRoad(roads, 19, 19, 19, 14);
+  // Connect Kerem and Havela spurs along row 14 to main corridor
+  _markRoad(roads, 15, 14, 19, 14);
+  // Misgav to Kerem spur connection
+  _markRoad(roads, 17, 7, 23, 13);
+
+  // River: column 15, all rows except bridge rows 13-14
+  const riverTiles = new Set();
+  for (let r = 0; r < ROWS; r++) {
+    const isBridge = (r === 13 || r === 14);
+    const idx = r * COLS + 15;
+    riverTiles.add(idx);
+    if (!isBridge) {
+      grid[idx] = 1; // impassable
+    }
+  }
+
+  // Decorative features: 0=none, 1=tree, 2=rock, 3=ruin
+  const features = new Uint8Array(COLS * ROWS);
+  // Build exclusion set: tiles within 2 of any initial building, river, or road
+  const exclusion = new Set();
+  for (const b of buildings) {
+    for (let dc = -2; dc <= b.w + 1; dc++)
+      for (let dr = -2; dr <= b.h + 1; dr++) {
+        const ec = b.col + dc, er = b.row + dr;
+        if (ec >= 0 && ec < COLS && er >= 0 && er < ROWS)
+          exclusion.add(er * COLS + ec);
+      }
+  }
+  for (const idx of roads) exclusion.add(idx);
+  for (const idx of riverTiles) exclusion.add(idx);
+
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      const idx = r * COLS + c;
+      if (exclusion.has(idx)) continue;
+      const rnd = Math.random();
+      if (c >= 12 && c <= 27) {
+        // neutral zone: trees and ruins
+        if (rnd < 0.03) features[idx] = 3;       // ruin
+        else if (rnd < 0.15) features[idx] = 1;   // tree
+      } else if (c < 12) {
+        // enemy dirt zone: rocks
+        if (rnd < 0.08) features[idx] = 2;
+      } else {
+        // player grass zone: sparse trees
+        if (rnd < 0.06) features[idx] = 1;
+      }
+    }
+  }
+
   return {
     ic: 200,
     elapsedTime: 0,
-    fog, fogOpacity, grid, buildings, units,
+    fog, fogOpacity, fogLit, grid, buildings, units,
+    tileColors, roads, features, riverTiles,
     selected: [],
     settlementsFallen: 0,
     gameState: 'playing', // playing | paused | win | lose
@@ -87,7 +183,7 @@ function createGameState() {
     droneCooldown: 0,
     icEarnedUnits: new Set(),
     icEarnedBuildings: new Set(),
-    icEarnedTiles: 0, // not tracked per-tile for perf, just flag set
+    icEarnedTiles: 0,
   };
 }
 
@@ -97,6 +193,17 @@ function _markGrid(grid, col, row, w, h, val) {
       const idx = (row + dr) * COLS + (col + dc);
       if (idx >= 0 && idx < grid.length) grid[idx] = val;
     }
+}
+
+// Mark a line of road tiles between two points (Bresenham)
+function _markRoad(roads, c1, r1, c2, r2) {
+  const steps = Math.max(Math.abs(c2 - c1), Math.abs(r2 - r1));
+  if (steps === 0) { roads.add(r1 * COLS + c1); return; }
+  for (let i = 0; i <= steps; i++) {
+    const c = Math.round(c1 + (c2 - c1) * i / steps);
+    const r = Math.round(r1 + (r2 - r1) * i / steps);
+    if (c >= 0 && c < COLS && r >= 0 && r < ROWS) roads.add(r * COLS + c);
+  }
 }
 
 // ============================================================
@@ -127,19 +234,71 @@ class Renderer {
   _drawTerrain(ctx, G) {
     for (let r = 0; r < ROWS; r++) {
       for (let c = 0; c < COLS; c++) {
-        const col = c < 12 ? COL.dirt : c > 27 ? COL.grass : '#222e14';
-        ctx.fillStyle = col;
-        ctx.fillRect(c * TILE, r * TILE, TILE, TILE);
-        // subtle grid lines
-        ctx.strokeStyle = 'rgba(0,0,0,0.15)';
-        ctx.strokeRect(c * TILE, r * TILE, TILE, TILE);
+        const idx = r * COLS + c;
+        const x = c * TILE, y = r * TILE;
+
+        // Base tile color (precomputed with noise + zone transitions)
+        if (G.riverTiles.has(idx)) {
+          const isBridge = (r === 13 || r === 14);
+          ctx.fillStyle = isBridge ? '#5a4a30' : '#1a2a3a';
+        } else if (G.roads.has(idx)) {
+          // Roads: slightly lighter/more tan version of zone color
+          const base = G.tileColors[idx];
+          ctx.fillStyle = base; // draw base first, then lighten below
+          ctx.fillRect(x, y, TILE, TILE);
+          ctx.fillStyle = 'rgba(200,160,90,0.22)';
+        } else {
+          ctx.fillStyle = G.tileColors[idx];
+        }
+        ctx.fillRect(x, y, TILE, TILE);
+
+        // Road overlay (already handled above for road base, add road center strip)
+        if (G.roads.has(idx) && !G.riverTiles.has(idx)) {
+          ctx.fillStyle = 'rgba(160,120,60,0.18)';
+          ctx.fillRect(x + 10, y + 10, TILE - 20, TILE - 20);
+        }
+
+        // Bridge planks
+        if (G.riverTiles.has(idx) && (r === 13 || r === 14)) {
+          ctx.fillStyle = 'rgba(90,70,40,0.5)';
+          ctx.fillRect(x + 3, y + 3, TILE - 6, TILE - 6);
+          // planks
+          ctx.fillStyle = 'rgba(120,90,50,0.4)';
+          for (let pl = 4; pl < TILE - 4; pl += 6) {
+            ctx.fillRect(x + 3, y + pl, TILE - 6, 3);
+          }
+        }
+
+        // Decorative features
+        const feat = G.features[idx];
+        if (feat === 1) {
+          // Tree: two small triangles
+          ctx.fillStyle = 'rgba(20,50,15,0.75)';
+          const tx = x + 8, ty = y + 18;
+          ctx.beginPath(); ctx.moveTo(tx, ty - 10); ctx.lineTo(tx - 5, ty); ctx.lineTo(tx + 5, ty); ctx.closePath(); ctx.fill();
+          const tx2 = x + 22, ty2 = y + 20;
+          ctx.beginPath(); ctx.moveTo(tx2, ty2 - 9); ctx.lineTo(tx2 - 4, ty2); ctx.lineTo(tx2 + 4, ty2); ctx.closePath(); ctx.fill();
+        } else if (feat === 2) {
+          // Rock: two small gray rectangles
+          ctx.fillStyle = 'rgba(80,75,70,0.7)';
+          ctx.fillRect(x + 7, y + 16, 7, 5);
+          ctx.fillRect(x + 18, y + 14, 5, 6);
+        } else if (feat === 3) {
+          // Ruin: crumbled rectangle outline + some fragments
+          ctx.strokeStyle = 'rgba(70,60,50,0.65)';
+          ctx.lineWidth = 1.5;
+          ctx.strokeRect(x + 6, y + 8, 12, 14);
+          ctx.fillStyle = 'rgba(60,50,40,0.5)';
+          ctx.fillRect(x + 6, y + 8, 4, 4);
+          ctx.fillRect(x + 14, y + 18, 4, 4);
+        }
+
+        // Subtle grid lines
+        ctx.strokeStyle = 'rgba(0,0,0,0.1)';
+        ctx.lineWidth = 0.5;
+        ctx.strokeRect(x, y, TILE, TILE);
       }
     }
-    // neutral zone markers
-    ctx.strokeStyle = 'rgba(255,255,255,0.04)';
-    ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.moveTo(12 * TILE, 0); ctx.lineTo(12 * TILE, CANVAS_H); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(27 * TILE, 0); ctx.lineTo(27 * TILE, CANVAS_H); ctx.stroke();
   }
 
   _drawBuildings(ctx, G) {
@@ -643,6 +802,9 @@ class Game {
 
   _updateFog() {
     const G = this.G;
+    // Reset currently-lit array each frame
+    G.fogLit.fill(0);
+
     // Gather all sight sources for player
     const sightSources = [];
     for (const u of G.units) {
@@ -656,7 +818,7 @@ class Game {
       }
     }
 
-    // Reveal tiles and grant IC
+    // Reveal tiles, mark lit, and grant IC
     for (const src of sightSources) {
       const sr = Math.round(src.sight);
       const minC = Math.max(0, Math.floor(src.col - sr));
@@ -668,6 +830,7 @@ class Game {
         for (let c = minC; c <= maxC; c++) {
           if (Math.hypot(c + 0.5 - src.col, r + 0.5 - src.row) > src.sight) continue;
           const idx = r * COLS + c;
+          G.fogLit[idx] = 1; // currently lit this frame
           if (G.fog[idx] === 0) {
             // First reveal — grant IC
             G.fog[idx] = 1;
