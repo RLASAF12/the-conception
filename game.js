@@ -1,0 +1,1009 @@
+// ============================================================
+// GAME.JS — Core game loop, state, rendering, fog of war
+// ============================================================
+
+const TICK_RATE = 1 / 60;
+const ATTACK_COOLDOWN = 0.5; // seconds between attacks
+
+// Settlement names & populations
+const SETTLEMENT_DATA = [
+  { col: 17, row: 7,  name: 'Kerem',   pop: 1200 },
+  { col: 19, row: 19, name: 'Havela',  pop: 800  },
+  { col: 23, row: 13, name: 'Misgav', pop: 950  },
+];
+
+// ---- Game state ----
+function createGameState() {
+  const fog = new Uint8Array(COLS * ROWS); // 0=fogged, 1=revealed
+  const fogOpacity = new Float32Array(COLS * ROWS).fill(1.0); // 1=black, 0=clear
+  const grid = new Uint8Array(COLS * ROWS); // 0=passable, 1=blocked
+
+  // Pre-reveal player start zone (cols 27-39)
+  for (let r = 0; r < ROWS; r++)
+    for (let c = 27; c < COLS; c++) {
+      fog[r * COLS + c] = 1;
+      fogOpacity[r * COLS + c] = 0;
+    }
+
+  const buildings = [];
+  const units = [];
+
+  // Player Command Base at col 35, row 14 (center)
+  const cb = createBuilding('command_base', 35, 14, 'player');
+  cb.buildProgress = 1;
+  _markGrid(grid, 35, 14, 2, 2, 1);
+  buildings.push(cb);
+
+  // Enemy Command Base (hidden, col 3, row 13)
+  const ecb = createBuilding('veil_command', 3, 13, 'enemy');
+  ecb.buildProgress = 1;
+  _markGrid(grid, 3, 13, 2, 2, 1);
+  buildings.push(ecb);
+
+  // Enemy initial barracks
+  const eb1 = createBuilding('veil_barracks', 6, 10, 'enemy');
+  eb1.buildProgress = 1;
+  _markGrid(grid, 6, 10, 2, 2, 1);
+  eb1.trainTimer = 10;
+  buildings.push(eb1);
+
+  // Neutral settlements
+  for (const sd of SETTLEMENT_DATA) {
+    const s = createSettlement(sd.col, sd.row, sd.name, sd.pop);
+    s.buildProgress = 1;
+    _markGrid(grid, sd.col, sd.row, 2, 2, 1);
+    buildings.push(s);
+  }
+
+  // Player starting units: 3 soldiers near command base
+  for (let i = 0; i < 3; i++) {
+    units.push(createUnit('soldier', 33 + i, 15, 'player'));
+  }
+
+  return {
+    ic: 200,
+    elapsedTime: 0,
+    fog, fogOpacity, grid, buildings, units,
+    selected: [],
+    settlementsFallen: 0,
+    gameState: 'playing', // playing | paused | win | lose
+    upgrades: {},
+    airstrikeAvailable: false,
+    buildMode: null, // { type, w, h } or null
+    placeCursorCol: 0, placeCursorRow: 0,
+    droneCooldown: 0,
+    icEarnedUnits: new Set(),
+    icEarnedBuildings: new Set(),
+    icEarnedTiles: 0, // not tracked per-tile for perf, just flag set
+  };
+}
+
+function _markGrid(grid, col, row, w, h, val) {
+  for (let dc = 0; dc < w; dc++)
+    for (let dr = 0; dr < h; dr++) {
+      const idx = (row + dr) * COLS + (col + dc);
+      if (idx >= 0 && idx < grid.length) grid[idx] = val;
+    }
+}
+
+// ============================================================
+// RENDERER
+// ============================================================
+class Renderer {
+  constructor(canvas, minimapCanvas) {
+    this.ctx = canvas.getContext('2d');
+    this.mctx = minimapCanvas.getContext('2d');
+    this.mW = minimapCanvas.width;
+    this.mH = minimapCanvas.height;
+  }
+
+  drawFrame(G) {
+    const ctx = this.ctx;
+    ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+
+    this._drawTerrain(ctx, G);
+    this._drawBuildings(ctx, G);
+    this._drawUnits(ctx, G);
+    this._drawFog(ctx, G);
+    this._drawSelectionHighlights(ctx, G);
+    this._drawHpBars(ctx, G);
+
+    this._drawMinimap(G);
+  }
+
+  _drawTerrain(ctx, G) {
+    for (let r = 0; r < ROWS; r++) {
+      for (let c = 0; c < COLS; c++) {
+        const col = c < 12 ? COL.dirt : c > 27 ? COL.grass : '#222e14';
+        ctx.fillStyle = col;
+        ctx.fillRect(c * TILE, r * TILE, TILE, TILE);
+        // subtle grid lines
+        ctx.strokeStyle = 'rgba(0,0,0,0.15)';
+        ctx.strokeRect(c * TILE, r * TILE, TILE, TILE);
+      }
+    }
+    // neutral zone markers
+    ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(12 * TILE, 0); ctx.lineTo(12 * TILE, CANVAS_H); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(27 * TILE, 0); ctx.lineTo(27 * TILE, CANVAS_H); ctx.stroke();
+  }
+
+  _drawBuildings(ctx, G) {
+    for (const b of G.buildings) {
+      if (b.dead) continue;
+      const fogIdx = Math.floor(b.row + b.h/2) * COLS + Math.floor(b.col + b.w/2);
+      const visible = b.faction === 'player' || G.fog[fogIdx] === 1;
+      if (!visible) continue;
+
+      const def = BUILDING_DEF[b.type];
+      const x = b.col * TILE, y = b.row * TILE;
+      const pw = b.w * TILE, ph = b.h * TILE;
+
+      // building body
+      ctx.fillStyle = def.color;
+      ctx.globalAlpha = b.buildProgress < 1 ? 0.4 + b.buildProgress * 0.6 : 1;
+      ctx.fillRect(x + 2, y + 2, pw - 4, ph - 4);
+      ctx.globalAlpha = 1;
+
+      // border
+      ctx.strokeStyle = b.faction === 'player' ? '#88bbff' :
+                        b.faction === 'enemy'  ? '#ffaaaa' : '#aaccaa';
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(x + 2, y + 2, pw - 4, ph - 4);
+
+      // label
+      if (G.fog[Math.floor(b.row) * COLS + Math.floor(b.col)] === 1) {
+        ctx.fillStyle = '#fff';
+        ctx.font = '8px Courier New';
+        ctx.textAlign = 'center';
+        const shortLabel = def.label.substring(0, 6);
+        ctx.fillText(shortLabel, x + pw / 2, y + ph / 2 + 3);
+      }
+
+      // building progress bar
+      if (b.buildProgress < 1) {
+        ctx.fillStyle = '#333';
+        ctx.fillRect(x + 2, y + ph - 6, pw - 4, 4);
+        ctx.fillStyle = '#4aff4a';
+        ctx.fillRect(x + 2, y + ph - 6, (pw - 4) * b.buildProgress, 4);
+      }
+
+      // train progress for selected buildings
+      if (b.trainQueue && b.trainQueue.length > 0 && b.trainTimer > 0) {
+        const uDef = UNIT_DEF[b.trainQueue[0]];
+        if (uDef) {
+          const prog = 1 - b.trainTimer / uDef.buildTime;
+          ctx.fillStyle = '#222';
+          ctx.fillRect(x + 2, y + 2, pw - 4, 4);
+          ctx.fillStyle = '#4a9eff';
+          ctx.fillRect(x + 2, y + 2, (pw - 4) * Math.max(0, Math.min(1, prog)), 4);
+        }
+      }
+    }
+  }
+
+  _drawUnits(ctx, G) {
+    for (const u of G.units) {
+      if (u.dead) continue;
+      const fc = Math.floor(u.row) * COLS + Math.floor(u.col);
+      const visible = u.faction === 'player' || G.fog[fc] === 1;
+      if (!visible) continue;
+
+      const x = u.col * TILE;
+      const y = u.row * TILE;
+      const def = UNIT_DEF[u.type];
+      const r = u.type === 'tank' ? 10 : u.type === 'drone' ? 7 : 6;
+
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fillStyle = def.color;
+      ctx.fill();
+      ctx.strokeStyle = u.faction === 'player' ? '#ffffff' : '#330000';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+
+      // directional dot for moving units
+      if (u.path.length > 0) {
+        const next = u.path[0];
+        const dx = next.col + 0.5 - u.col, dy = next.row + 0.5 - u.row;
+        const len = Math.hypot(dx, dy) || 1;
+        ctx.beginPath();
+        ctx.arc(x + (dx / len) * r * 0.6, y + (dy / len) * r * 0.6, 2, 0, Math.PI * 2);
+        ctx.fillStyle = '#fff';
+        ctx.fill();
+      }
+    }
+  }
+
+  _drawFog(ctx, G) {
+    // Draw fog as black cells with varying opacity
+    for (let r = 0; r < ROWS; r++) {
+      for (let c = 0; c < COLS; c++) {
+        const op = G.fogOpacity[r * COLS + c];
+        if (op <= 0.01) continue;
+        ctx.globalAlpha = op;
+        ctx.fillStyle = '#000';
+        ctx.fillRect(c * TILE, r * TILE, TILE, TILE);
+      }
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  _drawSelectionHighlights(ctx, G) {
+    for (const e of G.selected) {
+      ctx.strokeStyle = COL.select;
+      ctx.lineWidth = 2;
+      if (e.path !== undefined) {
+        // unit
+        ctx.beginPath();
+        ctx.arc(e.col * TILE, e.row * TILE, 12, 0, Math.PI * 2);
+        ctx.stroke();
+        // draw path
+        if (e.path.length > 0) {
+          ctx.strokeStyle = 'rgba(232,216,122,0.3)';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(e.col * TILE, e.row * TILE);
+          for (const p of e.path) ctx.lineTo((p.col + 0.5) * TILE, (p.row + 0.5) * TILE);
+          ctx.stroke();
+        }
+      } else {
+        // building
+        ctx.strokeRect(e.col * TILE + 1, e.row * TILE + 1, e.w * TILE - 2, e.h * TILE - 2);
+      }
+    }
+
+    // sight radius for selected player units/buildings
+    for (const e of G.selected) {
+      const sight = e.sight || 0;
+      if (sight <= 0) continue;
+      const cx = (e.col + (e.w ? e.w / 2 : 0)) * TILE;
+      const cy = (e.row + (e.h ? e.h / 2 : 0)) * TILE;
+      ctx.strokeStyle = 'rgba(100,200,255,0.2)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(cx, cy, sight * TILE, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  }
+
+  _drawHpBars(ctx, G) {
+    for (const e of [...G.units, ...G.buildings]) {
+      if (e.dead) continue;
+      const isUnit = e.path !== undefined;
+      const fogIdx = isUnit
+        ? Math.floor(e.row) * COLS + Math.floor(e.col)
+        : Math.floor(e.row + (e.h || 1) / 2) * COLS + Math.floor(e.col + (e.w || 1) / 2);
+      if (e.faction !== 'player' && G.fog[fogIdx] !== 1) continue;
+
+      const pct = e.hp / e.maxHp;
+      if (pct >= 1) continue; // don't show full health
+
+      const x = isUnit ? e.col * TILE - 12 : e.col * TILE + 2;
+      const y = isUnit ? e.row * TILE - 14  : e.row * TILE - 6;
+      const w = isUnit ? 24 : (e.w || 1) * TILE - 4;
+
+      ctx.fillStyle = '#111';
+      ctx.fillRect(x, y, w, 3);
+      ctx.fillStyle = pct > 0.5 ? '#4aff4a' : pct > 0.25 ? '#e8d87a' : '#ff4444';
+      ctx.fillRect(x, y, w * pct, 3);
+    }
+  }
+
+  _drawMinimap(G) {
+    const mctx = this.mctx;
+    mctx.clearRect(0, 0, this.mW, this.mH);
+    const tw = this.mW / COLS;
+    const th = this.mH / ROWS;
+
+    // terrain
+    for (let r = 0; r < ROWS; r++) {
+      for (let c = 0; c < COLS; c++) {
+        const fogIdx = r * COLS + c;
+        if (G.fogOpacity[fogIdx] > 0.9) { mctx.fillStyle = '#000'; }
+        else if (c < 12) { mctx.fillStyle = '#2a2010'; }
+        else if (c > 27) { mctx.fillStyle = '#1a2a0a'; }
+        else mctx.fillStyle = '#182010';
+        mctx.fillRect(c * tw, r * th, tw, th);
+      }
+    }
+    // buildings
+    for (const b of G.buildings) {
+      if (b.dead) continue;
+      const fi = Math.floor(b.row + b.h/2) * COLS + Math.floor(b.col + b.w/2);
+      if (b.faction !== 'player' && G.fog[fi] !== 1) continue;
+      const def = BUILDING_DEF[b.type];
+      mctx.fillStyle = def.color;
+      mctx.fillRect(b.col * tw, b.row * th, b.w * tw, b.h * th);
+    }
+    // units
+    for (const u of G.units) {
+      if (u.dead) continue;
+      const fi = Math.floor(u.row) * COLS + Math.floor(u.col);
+      if (u.faction !== 'player' && G.fog[fi] !== 1) continue;
+      mctx.fillStyle = UNIT_DEF[u.type].color;
+      mctx.fillRect(u.col * tw - 1, u.row * th - 1, 2, 2);
+    }
+    // viewport indicator
+    mctx.strokeStyle = 'rgba(255,255,255,0.5)';
+    mctx.lineWidth = 0.5;
+    mctx.strokeRect(0, 0, this.mW, this.mH);
+  }
+}
+
+// ============================================================
+// GAME CLASS
+// ============================================================
+class Game {
+  constructor() {
+    this.canvas = document.getElementById('game-canvas');
+    this.minimapCanvas = document.getElementById('minimap');
+    this.renderer = new Renderer(this.canvas, this.minimapCanvas);
+    this.G = null;
+    this._lastTime = 0;
+    this._raf = null;
+    this._boxStart = null;
+    this._isDragging = false;
+
+    this._bindEvents();
+    this._showStartScreen();
+  }
+
+  _showStartScreen() {
+    document.getElementById('overlay').style.display = 'flex';
+    document.getElementById('start-btn').onclick = () => {
+      document.getElementById('overlay').style.display = 'none';
+      this.start();
+    };
+  }
+
+  start() {
+    if (this._raf) cancelAnimationFrame(this._raf);
+    _nextId = 1;
+    this.G = createGameState();
+    window.G = this; // expose for UI callbacks
+    UI.resetVoice();
+    AI.state.buildIndex = 0;
+    AI.state.resources = 500;
+    AI.state.assaultTriggered = false;
+    AI.state.heaviesUnlocked = false;
+
+    setTimeout(() => UI.voice('game_start'), 500);
+    this._lastTime = performance.now();
+    this._loop(this._lastTime);
+  }
+
+  _loop(now) {
+    const dt = Math.min((now - this._lastTime) / 1000, 0.1);
+    this._lastTime = now;
+
+    if (this.G.gameState === 'playing') {
+      this._update(dt);
+    }
+    this.renderer.drawFrame(this.G);
+    this._updateHUD();
+
+    this._raf = requestAnimationFrame((t) => this._loop(t));
+  }
+
+  // ---- UPDATE ----
+  _update(dt) {
+    const G = this.G;
+    G.elapsedTime += dt;
+    if (G.droneCooldown > 0) G.droneCooldown -= dt;
+
+    this._updateBuildings(dt);
+    AI.tick(G, dt);
+    this._updateUnits(dt);
+    this._updateFog();
+    this._updateSettlements();
+    this._checkWinLose();
+  }
+
+  _updateBuildings(dt) {
+    const G = this.G;
+    for (const b of G.buildings) {
+      if (b.dead || b.faction !== 'player') continue;
+      if (b.buildProgress < 1) {
+        b.buildProgress += dt / b.buildTimeTotal;
+        if (b.buildProgress >= 1) {
+          b.buildProgress = 1;
+          _markGrid(G.grid, b.col, b.row, b.w, b.h, 1);
+        }
+        continue;
+      }
+      // training
+      if (b.trainQueue && b.trainQueue.length > 0) {
+        b.trainTimer -= dt;
+        if (b.trainTimer <= 0) {
+          const uType = b.trainQueue.shift();
+          const u = createUnit(uType, b.col + b.w, b.row + b.h - 1, 'player');
+          if (uType === 'drone') {
+            const def = UNIT_DEF.drone;
+            if (G.upgrades.drone_resilience) { u.hp = 90; u.maxHp = 90; }
+          }
+          if (uType === 'scout_vehicle') {
+            if (G.upgrades.scout_speed_1)    u.speed = UNIT_DEF.scout_vehicle.speed * 1.4;
+            if (G.upgrades.extended_reveal_1) u.sight = 10;
+          }
+          G.units.push(u);
+          if (b.trainQueue.length > 0) {
+            b.trainTimer = UNIT_DEF[b.trainQueue[0]].buildTime;
+          }
+        }
+      }
+    }
+  }
+
+  _updateUnits(dt) {
+    const G = this.G;
+    const dead = [];
+
+    for (const u of G.units) {
+      if (u.dead) continue;
+
+      // movement
+      if (u.path.length > 0 && !u.attackTarget) {
+        const next = u.path[0];
+        const tx = next.col + 0.5, ty = next.row + 0.5;
+        const dx = tx - u.col, dy = ty - u.row;
+        const dist = Math.hypot(dx, dy);
+        const step = u.speed * dt;
+        if (dist <= step) {
+          u.col = tx; u.row = ty;
+          u.path.shift();
+        } else {
+          u.col += (dx / dist) * step;
+          u.row += (dy / dist) * step;
+        }
+      }
+
+      // auto-attack
+      u.attackCooldown -= dt;
+      if (!u.attackTarget) {
+        u.attackTarget = this._findAttackTarget(u);
+      }
+      if (u.attackTarget) {
+        if (u.attackTarget.dead) { u.attackTarget = null; continue; }
+        const def = UNIT_DEF[u.type];
+        if (!def.damage) { u.attackTarget = null; continue; }
+        const range = def.attackRange;
+        const tx = u.attackTarget.col + (u.attackTarget.w ? u.attackTarget.w / 2 : 0);
+        const ty = u.attackTarget.row + (u.attackTarget.h ? u.attackTarget.h / 2 : 0);
+        const dist = Math.hypot(tx - u.col, ty - u.row);
+        if (dist > range + 0.5) {
+          // move toward target
+          const path = bfsPath(G.grid,
+            Math.floor(u.col), Math.floor(u.row),
+            Math.floor(tx), Math.floor(ty));
+          if (path) u.path = path.slice(0, 6);
+          u.attackTarget = null;
+        } else if (u.attackCooldown <= 0) {
+          u.attackCooldown = ATTACK_COOLDOWN;
+          u.attackTarget.hp -= def.damage;
+          // splash for tanks
+          if (def.splash && def.splashRange) {
+            for (const other of G.units) {
+              if (other === u.attackTarget || other.dead || other.faction === u.faction) continue;
+              if (Math.hypot(other.col - tx, other.row - ty) <= def.splashRange) {
+                other.hp -= def.damage * 0.5;
+              }
+            }
+          }
+          if (u.attackTarget.hp <= 0) {
+            this._handleDeath(u.attackTarget);
+            u.attackTarget = null;
+          }
+        }
+      }
+    }
+  }
+
+  _findAttackTarget(u) {
+    const G = this.G;
+    const def = UNIT_DEF[u.type];
+    if (!def.damage) return null;
+    const range = def.attackRange + 0.5;
+    const oppFaction = u.faction === 'player' ? 'enemy' : 'player';
+
+    let best = null, bestDist = Infinity;
+    // enemy units
+    for (const other of G.units) {
+      if (other.dead || other.faction === u.faction) continue;
+      const dist = Math.hypot(other.col - u.col, other.row - u.row);
+      if (dist <= range && dist < bestDist) { best = other; bestDist = dist; }
+    }
+    // enemy buildings (only if explicitly ordered or for enemy units)
+    if (!best && (def.canAttackBuildings || u.faction === 'enemy')) {
+      for (const b of G.buildings) {
+        if (b.dead || b.faction === u.faction || b.faction === 'neutral') continue;
+        // enemy: can attack neutral settlements
+        if (u.faction === 'enemy' && b.faction === 'player') {
+          const bx = b.col + b.w / 2, by = b.row + b.h / 2;
+          const dist = Math.hypot(bx - u.col, by - u.row);
+          if (dist <= range && dist < bestDist) { best = b; bestDist = dist; }
+        }
+      }
+      // enemy attacks settlements
+      if (!best && u.faction === 'enemy') {
+        for (const b of G.buildings) {
+          if (b.dead || b.type !== 'settlement') continue;
+          const bx = b.col + b.w / 2, by = b.row + b.h / 2;
+          const dist = Math.hypot(bx - u.col, by - u.row);
+          if (dist <= range + 1 && dist < bestDist) { best = b; bestDist = dist; }
+        }
+      }
+    }
+    return best;
+  }
+
+  _handleDeath(entity) {
+    const G = this.G;
+    entity.dead = true;
+    entity.hp = 0;
+
+    // Remove from grid if building
+    if (entity.w !== undefined) {
+      _markGrid(G.grid, entity.col, entity.row, entity.w, entity.h, 0);
+    }
+
+    // Voice line triggers
+    if (entity.faction === 'player') {
+      if (entity.type === 'scout_vehicle') UI.voice('scout_killed');
+      if (entity.type === 'drone') {
+        G.droneCooldown = 60;
+        UI.voice('drone_down');
+      }
+      if (entity.type === 'barracks') UI.voice('barracks_destroyed');
+      if (entity.type === 'command_base') {
+        G.gameState = 'lose';
+      }
+    }
+  }
+
+  _updateFog() {
+    const G = this.G;
+    // Gather all sight sources for player
+    const sightSources = [];
+    for (const u of G.units) {
+      if (u.dead || u.faction !== 'player') continue;
+      sightSources.push({ col: u.col, row: u.row, sight: u.sight });
+    }
+    for (const b of G.buildings) {
+      if (b.dead || b.faction !== 'player' || b.buildProgress < 1) continue;
+      if (b.sight > 0) {
+        sightSources.push({ col: b.col + b.w / 2, row: b.row + b.h / 2, sight: b.sight });
+      }
+    }
+
+    // Reveal tiles and grant IC
+    for (const src of sightSources) {
+      const sr = Math.round(src.sight);
+      const minC = Math.max(0, Math.floor(src.col - sr));
+      const maxC = Math.min(COLS - 1, Math.ceil(src.col + sr));
+      const minR = Math.max(0, Math.floor(src.row - sr));
+      const maxR = Math.min(ROWS - 1, Math.ceil(src.row + sr));
+
+      for (let r = minR; r <= maxR; r++) {
+        for (let c = minC; c <= maxC; c++) {
+          if (Math.hypot(c + 0.5 - src.col, r + 0.5 - src.row) > src.sight) continue;
+          const idx = r * COLS + c;
+          if (G.fog[idx] === 0) {
+            // First reveal — grant IC
+            G.fog[idx] = 1;
+            G.fogOpacity[idx] = 0;
+            G.ic += 2;
+            G.icEarnedTiles++;
+          }
+          // Check enemy discoveries
+          this._checkDiscoveries(c, r);
+        }
+      }
+    }
+  }
+
+  _checkDiscoveries(c, r) {
+    const G = this.G;
+    for (const u of G.units) {
+      if (u.discovered || u.dead || u.faction !== 'enemy') continue;
+      if (Math.floor(u.col) === c && Math.floor(u.row) === r) {
+        u.discovered = true;
+        G.ic += 25;
+        if (!G._firstEnemyUnitFound) {
+          G._firstEnemyUnitFound = true;
+          UI.voice('first_enemy_unit');
+        }
+      }
+    }
+    for (const b of G.buildings) {
+      if (b.discovered || b.dead || b.faction !== 'enemy') continue;
+      const bc = Math.floor(b.col + b.w / 2);
+      const br = Math.floor(b.row + b.h / 2);
+      if (Math.abs(bc - c) <= b.w && Math.abs(br - r) <= b.h) {
+        b.discovered = true;
+        const bonus = G.upgrades.deep_intel ? 100 : 50;
+        if (b.type === 'veil_command') {
+          G.ic += 150;
+          UI.voice('command_base_found');
+        } else {
+          G.ic += bonus;
+          if (!G._firstEnemyBuildingFound) {
+            G._firstEnemyBuildingFound = true;
+            UI.voice('first_enemy_building');
+          }
+        }
+      }
+    }
+  }
+
+  _updateSettlements() {
+    const G = this.G;
+    for (const b of G.buildings) {
+      if (b.dead || b.type !== 'settlement') continue;
+      const bx = b.col + b.w / 2, by = b.row + b.h / 2;
+      const attackers = G.units.filter(u =>
+        !u.dead && u.faction === 'enemy' &&
+        Math.hypot(u.col - bx, u.row - by) <= 3
+      );
+      if (attackers.length > 0 && !b.underAttack) {
+        b.underAttack = true;
+        if (!b.alertFired) {
+          b.alertFired = true;
+          UI.voice('settlement_attack', b.name);
+          UI.triggerAlertFlash();
+        }
+      }
+      if (attackers.length === 0) b.underAttack = false;
+      const pct = b.hp / b.maxHp;
+      if (pct <= 0.5 && !b.alert50Fired) {
+        b.alert50Fired = true;
+        UI.voice('settlement_50hp', b.name);
+        UI.triggerAlertFlash();
+      }
+      if (b.hp <= 0 && !b.dead) {
+        b.dead = true;
+        _markGrid(G.grid, b.col, b.row, b.w, b.h, 0);
+        G.settlementsFallen++;
+        UI.voice('settlement_falls', b.name, b.population);
+        UI.triggerAlertFlash();
+        if (G.settlementsFallen === 2) UI.voice('second_settlement_falls');
+      }
+    }
+  }
+
+  _checkWinLose() {
+    const G = this.G;
+    const ecb = G.buildings.find(b => b.type === 'veil_command');
+    if (ecb && ecb.dead) {
+      G.gameState = 'win';
+    }
+    if (G.settlementsFallen >= 3) {
+      G.gameState = 'lose';
+    }
+    if (G.gameState === 'win' || G.gameState === 'lose') {
+      UI.voice(G.gameState);
+      setTimeout(() => this._showEndScreen(), 2500);
+    }
+  }
+
+  _showEndScreen() {
+    const G = this.G;
+    const overlay = document.getElementById('overlay');
+    overlay.innerHTML = '';
+    overlay.style.display = 'flex';
+
+    const title = document.createElement('h1');
+    title.textContent = G.gameState === 'win' ? 'MISSION COMPLETE' : 'MISSION FAILED';
+    title.style.color = G.gameState === 'win' ? '#4aff4a' : '#ff4a4a';
+    overlay.appendChild(title);
+
+    const sub = document.createElement('h2');
+    const mins = Math.floor(G.elapsedTime / 60);
+    const secs = Math.floor(G.elapsedTime % 60);
+    sub.textContent = `Time: ${mins}:${secs.toString().padStart(2,'0')}`;
+    overlay.appendChild(sub);
+
+    const stats = document.createElement('p');
+    const unitsKilled = G.units.filter(u => u.dead && u.faction === 'enemy').length;
+    const settlementsHeld = 3 - G.settlementsFallen;
+    stats.innerHTML = `Enemy units eliminated: ${unitsKilled}<br>Settlements held: ${settlementsHeld}/3<br>Intelligence Credits earned: ${G.ic}`;
+    overlay.appendChild(stats);
+
+    const btn = document.createElement('button');
+    btn.className = 'overlay-btn';
+    btn.textContent = 'RESTART MISSION';
+    btn.onclick = () => { overlay.style.display = 'none'; this.start(); };
+    overlay.appendChild(btn);
+  }
+
+  // ---- HUD update ----
+  _updateHUD() {
+    if (!this.G) return;
+    const G = this.G;
+    UI.updateResource(G.ic);
+    UI.updateTimer(G.elapsedTime);
+    const settlements = G.buildings.filter(b => b.type === 'settlement');
+    UI.updateSettlementHps(settlements);
+  }
+
+  // ---- INPUT ----
+  _bindEvents() {
+    const canvas = this.canvas;
+
+    canvas.addEventListener('mousedown', (e) => this._onMouseDown(e));
+    canvas.addEventListener('mousemove', (e) => this._onMouseMove(e));
+    canvas.addEventListener('mouseup',   (e) => this._onMouseUp(e));
+    canvas.addEventListener('contextmenu', (e) => { e.preventDefault(); this._onRightClick(e); });
+
+    document.addEventListener('keydown', (e) => this._onKey(e));
+  }
+
+  _canvasPos(e) {
+    const rect = this.canvas.getBoundingClientRect();
+    const scaleX = this.canvas.width  / rect.width;
+    const scaleY = this.canvas.height / rect.height;
+    return {
+      x: (e.clientX - rect.left) * scaleX,
+      y: (e.clientY - rect.top)  * scaleY,
+      col: Math.floor((e.clientX - rect.left) * scaleX / TILE),
+      row: Math.floor((e.clientY - rect.top)  * scaleY / TILE),
+    };
+  }
+
+  _onMouseDown(e) {
+    if (!this.G || this.G.gameState !== 'playing') return;
+    const pos = this._canvasPos(e);
+    if (e.button === 0) {
+      if (this.G.buildMode) {
+        this._tryPlaceBuilding(pos.col, pos.row);
+        return;
+      }
+      this._boxStart = pos;
+      this._isDragging = false;
+    }
+  }
+
+  _onMouseMove(e) {
+    if (!this.G) return;
+    const pos = this._canvasPos(e);
+    if (this.G.buildMode) {
+      const def = BUILDING_DEF[this.G.buildMode];
+      const [w, h] = def.size;
+      const valid = this._canPlaceAt(pos.col, pos.row, w, h);
+      UI.showPlacementCursor(pos.col, pos.row, w, h, valid);
+      return;
+    }
+    if (this._boxStart) {
+      const dx = pos.x - this._boxStart.x, dy = pos.y - this._boxStart.y;
+      if (Math.hypot(dx, dy) > 6) this._isDragging = true;
+    }
+  }
+
+  _onMouseUp(e) {
+    if (!this.G || this.G.gameState !== 'playing') return;
+    if (e.button !== 0) return;
+    const pos = this._canvasPos(e);
+    if (this.G.buildMode) return;
+
+    if (this._isDragging && this._boxStart) {
+      // Box select
+      const x1 = Math.min(this._boxStart.x, pos.x);
+      const x2 = Math.max(this._boxStart.x, pos.x);
+      const y1 = Math.min(this._boxStart.y, pos.y);
+      const y2 = Math.max(this._boxStart.y, pos.y);
+      const selected = this.G.units.filter(u =>
+        !u.dead && u.faction === 'player' &&
+        u.col * TILE >= x1 && u.col * TILE <= x2 &&
+        u.row * TILE >= y1 && u.row * TILE <= y2
+      );
+      this.G.selected = selected;
+    } else {
+      // Single click — check unit then building
+      const clicked = this._entityAt(pos.col, pos.row);
+      if (clicked) {
+        this.G.selected = [clicked];
+      } else {
+        this.G.selected = [];
+      }
+    }
+
+    UI.updateSelectionInfo(this.G.selected, this.G);
+    this._boxStart = null;
+    this._isDragging = false;
+  }
+
+  _onRightClick(e) {
+    if (!this.G || this.G.gameState !== 'playing') return;
+    const pos = this._canvasPos(e);
+    const G = this.G;
+
+    const playerUnits = G.selected.filter(u => u.path !== undefined && u.faction === 'player' && !u.dead);
+    if (playerUnits.length === 0) return;
+
+    // Check if right-clicking on an enemy entity to attack
+    const target = this._entityAt(pos.col, pos.row);
+    if (target && target.faction === 'enemy') {
+      for (const u of playerUnits) {
+        u.attackTarget = target;
+        u.path = [];
+      }
+      return;
+    }
+
+    // Move order
+    const path = bfsPath(G.grid,
+      Math.floor(playerUnits[0].col), Math.floor(playerUnits[0].row),
+      pos.col, pos.row);
+
+    // Spread units in a small group formation
+    for (let i = 0; i < playerUnits.length; i++) {
+      const u = playerUnits[i];
+      const offset = _formationOffset(i);
+      const tc = Math.max(0, Math.min(COLS - 1, pos.col + offset.dc));
+      const tr = Math.max(0, Math.min(ROWS - 1, pos.row + offset.dr));
+      const p = bfsPath(G.grid, Math.floor(u.col), Math.floor(u.row), tc, tr);
+      if (p) { u.path = p; u.attackTarget = null; }
+    }
+
+    // If first scout, fire voice
+    const hasScout = playerUnits.some(u => u.type === 'scout_vehicle' || u.type === 'drone');
+    if (hasScout && !G._firstScoutFired) {
+      G._firstScoutFired = true;
+      UI.voice('first_scout');
+    }
+  }
+
+  _onKey(e) {
+    if (!this.G) return;
+    switch (e.key) {
+      case 'Escape':
+        if (this.G.buildMode) { this.cancelBuildMode(); break; }
+        if (this.G.gameState === 'playing') {
+          this.G.gameState = 'paused';
+          this._showPauseMenu();
+        } else if (this.G.gameState === 'paused') {
+          this.G.gameState = 'playing';
+          document.getElementById('overlay').style.display = 'none';
+        }
+        break;
+      case 'b': case 'B':
+        if (this.G.gameState === 'playing') {
+          const cb = this.G.buildings.find(b => b.type === 'command_base' && !b.dead);
+          if (cb) UI.showBuildMenu(this.G, (type) => this._enterBuildMode(type));
+        }
+        break;
+    }
+  }
+
+  _showPauseMenu() {
+    const overlay = document.getElementById('overlay');
+    overlay.innerHTML = `
+      <h1 style="font-size:32px">PAUSED</h1>
+      <button class="overlay-btn" id="resume-btn">RESUME</button>
+      <button class="overlay-btn" id="restart-btn2">RESTART</button>
+    `;
+    overlay.style.display = 'flex';
+    document.getElementById('resume-btn').onclick = () => {
+      overlay.style.display = 'none';
+      this.G.gameState = 'playing';
+    };
+    document.getElementById('restart-btn2').onclick = () => {
+      overlay.style.display = 'none';
+      this.start();
+    };
+  }
+
+  _entityAt(col, row) {
+    const G = this.G;
+    // units first
+    for (const u of G.units) {
+      if (u.dead) continue;
+      if (Math.abs(u.col - (col + 0.5)) < 0.8 && Math.abs(u.row - (row + 0.5)) < 0.8) {
+        return u;
+      }
+    }
+    // buildings
+    for (const b of G.buildings) {
+      if (b.dead) continue;
+      if (col >= b.col && col < b.col + b.w && row >= b.row && row < b.row + b.h) {
+        return b;
+      }
+    }
+    return null;
+  }
+
+  _canPlaceAt(col, row, w, h) {
+    const G = this.G;
+    if (col < 27 || col + w > COLS || row < 0 || row + h > ROWS) return false; // player zone only
+    for (let dc = 0; dc < w; dc++)
+      for (let dr = 0; dr < h; dr++)
+        if (G.grid[(row + dr) * COLS + (col + dc)] !== 0) return false;
+    return true;
+  }
+
+  _enterBuildMode(type) {
+    this.G.buildMode = type;
+    this.canvas.style.cursor = 'crosshair';
+  }
+
+  cancelBuildMode() {
+    if (!this.G) return;
+    this.G.buildMode = null;
+    this.canvas.style.cursor = 'default';
+    UI.hidePlacementCursor();
+    UI.updateSelectionInfo(this.G.selected, this.G);
+  }
+
+  _tryPlaceBuilding(col, row) {
+    const G = this.G;
+    const type = G.buildMode;
+    const def = BUILDING_DEF[type];
+    const [w, h] = def.size;
+
+    if (!this._canPlaceAt(col, row, w, h)) return; // invalid placement
+    if (G.ic < def.cost) { UI.voice('insufficient_resources'); UI.flashResourceRed(); return; }
+
+    const maxCount = def.maxCount;
+    if (maxCount !== undefined && maxCount !== Infinity) {
+      const count = G.buildings.filter(b => b.type === type && b.faction === 'player' && !b.dead).length;
+      if (count >= maxCount) return;
+    }
+
+    G.ic -= def.cost;
+    const b = createBuilding(type, col, row, 'player');
+    G.buildings.push(b);
+    // mark grid immediately to prevent overlap during construction
+    _markGrid(G.grid, col, row, w, h, 1);
+
+    this.cancelBuildMode();
+    G.selected = [b];
+    UI.updateSelectionInfo(G.selected, G);
+  }
+
+  trainUnit(building, uType) {
+    const G = this.G;
+    if (!G || G.gameState !== 'playing') return;
+    const def = UNIT_DEF[uType];
+    if (!def) return;
+    if (G.ic < def.cost) { UI.voice('insufficient_resources'); UI.flashResourceRed(); return; }
+
+    const activeCount = G.units.filter(u => u.type === uType && u.faction === 'player' && !u.dead).length;
+    if (activeCount >= def.maxActive) return;
+
+    if (uType === 'drone' && G.droneCooldown > 0) {
+      UI.voice('insufficient_resources'); return;
+    }
+
+    if (building.trainQueue.length >= 3) return; // queue full
+
+    G.ic -= def.cost;
+    building.trainQueue.push(uType);
+    if (building.trainQueue.length === 1) {
+      building.trainTimer = def.buildTime;
+    }
+    UI.updateSelectionInfo(G.selected, G);
+  }
+
+  purchaseUpgrade(upg) {
+    const G = this.G;
+    if (!G || G.ic < upg.cost) return;
+    if (G.upgrades[upg.id]) return;
+    G.ic -= upg.cost;
+    upg.apply(G);
+    UI.updateSelectionInfo(G.selected, G);
+  }
+}
+
+// ---- Formation offset helper ----
+function _formationOffset(i) {
+  const offsets = [
+    {dc:0,dr:0},{dc:1,dr:0},{dc:-1,dr:0},{dc:0,dr:1},{dc:0,dr:-1},
+    {dc:1,dr:1},{dc:-1,dr:1},{dc:1,dr:-1},{dc:-1,dr:-1},
+    {dc:2,dr:0},{dc:-2,dr:0},{dc:0,dr:2},
+  ];
+  return offsets[i % offsets.length];
+}
+
+// ---- Boot ----
+const gameInstance = new Game();

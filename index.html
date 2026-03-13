@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>The Conception</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #0a0a0a;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      font-family: 'Courier New', monospace;
+      color: #ccc;
+      overflow: hidden;
+    }
+    #game-container {
+      position: relative;
+      width: 1280px;
+      height: 960px;
+    }
+    #game-canvas {
+      display: block;
+      cursor: default;
+    }
+    #ui-overlay {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      pointer-events: none;
+    }
+    /* Resource bar */
+    #resource-bar {
+      position: absolute;
+      top: 8px; left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0,0,0,0.75);
+      border: 1px solid #444;
+      padding: 6px 18px;
+      font-size: 14px;
+      letter-spacing: 1px;
+      color: #e8d87a;
+      pointer-events: none;
+    }
+    /* Commander voice */
+    #voice-log {
+      position: absolute;
+      top: 40px; right: 12px;
+      width: 360px;
+      pointer-events: none;
+    }
+    .voice-line {
+      background: rgba(0,0,0,0.8);
+      border-left: 3px solid #e8d87a;
+      padding: 6px 10px;
+      margin-bottom: 4px;
+      font-size: 12px;
+      color: #ddd;
+      animation: fadeVoice 5s forwards;
+    }
+    @keyframes fadeVoice {
+      0%   { opacity: 1; }
+      70%  { opacity: 1; }
+      100% { opacity: 0; }
+    }
+    /* Bottom HUD */
+    #bottom-hud {
+      position: absolute;
+      bottom: 0; left: 0; right: 0;
+      height: 120px;
+      background: rgba(0,0,0,0.85);
+      border-top: 1px solid #333;
+      display: flex;
+      align-items: center;
+      padding: 0 12px;
+      gap: 8px;
+      pointer-events: all;
+    }
+    #selection-info {
+      flex: 1;
+      padding: 8px;
+      border: 1px solid #333;
+      height: 100px;
+      overflow: hidden;
+    }
+    #selection-info h3 { font-size: 13px; color: #e8d87a; margin-bottom: 4px; }
+    #selection-info p  { font-size: 11px; color: #aaa; }
+    #build-panel {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      height: 100px;
+      overflow-y: auto;
+    }
+    .build-btn {
+      background: rgba(30,30,30,0.9);
+      border: 1px solid #555;
+      color: #ccc;
+      padding: 4px 10px;
+      font-size: 11px;
+      font-family: 'Courier New', monospace;
+      cursor: pointer;
+      white-space: nowrap;
+      pointer-events: all;
+    }
+    .build-btn:hover { background: rgba(60,60,40,0.9); border-color: #e8d87a; color: #e8d87a; }
+    .build-btn:disabled { opacity: 0.4; cursor: default; }
+    #minimap-container {
+      position: absolute;
+      bottom: 128px; right: 8px;
+      border: 1px solid #444;
+      pointer-events: none;
+    }
+    #minimap { display: block; }
+    /* Overlays */
+    #overlay {
+      position: absolute;
+      top: 0; left: 0; width: 100%; height: 100%;
+      background: rgba(0,0,0,0.88);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 18px;
+      pointer-events: all;
+      z-index: 100;
+    }
+    #overlay h1 { font-size: 42px; letter-spacing: 6px; color: #e8d87a; }
+    #overlay h2 { font-size: 22px; color: #aaa; letter-spacing: 2px; }
+    #overlay p  { font-size: 13px; color: #777; max-width: 500px; text-align: center; line-height: 1.7; }
+    .overlay-btn {
+      background: transparent;
+      border: 1px solid #666;
+      color: #ccc;
+      padding: 10px 30px;
+      font-size: 14px;
+      font-family: 'Courier New', monospace;
+      letter-spacing: 2px;
+      cursor: pointer;
+      pointer-events: all;
+    }
+    .overlay-btn:hover { border-color: #e8d87a; color: #e8d87a; }
+    #stats { font-size: 12px; color: #888; text-align: center; line-height: 1.8; }
+    /* Placement ghost */
+    #placement-cursor {
+      position: absolute;
+      pointer-events: none;
+      border: 2px dashed rgba(100,200,100,0.7);
+      background: rgba(100,200,100,0.12);
+      display: none;
+    }
+    /* Alert flash */
+    #alert-flash {
+      position: absolute;
+      top: 0; left: 0; width: 100%; height: 100%;
+      pointer-events: none;
+      border: 4px solid transparent;
+    }
+    .alert-flash-active {
+      animation: alertPulse 0.5s ease-in-out 3;
+    }
+    @keyframes alertPulse {
+      0%   { border-color: transparent; }
+      50%  { border-color: rgba(255,50,50,0.7); }
+      100% { border-color: transparent; }
+    }
+    /* Upgrade panel */
+    #upgrade-panel {
+      position: absolute;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(5,5,5,0.96);
+      border: 1px solid #555;
+      padding: 18px;
+      width: 420px;
+      display: none;
+      z-index: 50;
+      pointer-events: all;
+    }
+    #upgrade-panel h3 { font-size: 14px; color: #e8d87a; margin-bottom: 12px; letter-spacing: 2px; }
+    .upgrade-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 6px 0;
+      border-bottom: 1px solid #222;
+    }
+    .upgrade-item span { font-size: 11px; color: #aaa; }
+    .upgrade-item .cost { color: #e8d87a; font-size: 11px; }
+    .upgrade-item button {
+      background: transparent;
+      border: 1px solid #555;
+      color: #ccc;
+      padding: 2px 8px;
+      font-size: 10px;
+      font-family: 'Courier New', monospace;
+      cursor: pointer;
+    }
+    .upgrade-item button:hover { border-color: #e8d87a; color: #e8d87a; }
+    .upgrade-item button:disabled { opacity: 0.3; cursor: default; }
+    #close-upgrade {
+      margin-top: 10px;
+      background: transparent;
+      border: 1px solid #444;
+      color: #777;
+      padding: 4px 14px;
+      font-size: 11px;
+      font-family: 'Courier New', monospace;
+      cursor: pointer;
+    }
+    #close-upgrade:hover { border-color: #777; color: #aaa; }
+    #timer-display {
+      position: absolute;
+      top: 8px; left: 12px;
+      font-size: 13px;
+      color: #888;
+      pointer-events: none;
+    }
+    #settlement-hps {
+      position: absolute;
+      top: 36px; left: 12px;
+      pointer-events: none;
+    }
+    .settlement-hp-label {
+      font-size: 11px;
+      color: #aaa;
+      margin-bottom: 2px;
+    }
+  </style>
+</head>
+<body>
+<div id="game-container">
+  <canvas id="game-canvas" width="1280" height="840"></canvas>
+
+  <div id="ui-overlay">
+    <div id="timer-display">00:00</div>
+    <div id="resource-bar">IC: 200</div>
+    <div id="voice-log"></div>
+    <div id="settlement-hps"></div>
+    <div id="alert-flash"></div>
+    <div id="minimap-container">
+      <canvas id="minimap" width="200" height="150"></canvas>
+    </div>
+    <div id="placement-cursor"></div>
+  </div>
+
+  <div id="bottom-hud">
+    <div id="selection-info">
+      <h3 id="sel-name">—</h3>
+      <p id="sel-details"></p>
+      <p id="sel-queue"></p>
+    </div>
+    <div id="build-panel"></div>
+  </div>
+
+  <div id="upgrade-panel">
+    <h3>INTELLIGENCE UPGRADES</h3>
+    <div id="upgrade-list"></div>
+    <button id="close-upgrade">CLOSE</button>
+  </div>
+
+  <div id="overlay">
+    <h1>THE CONCEPTION</h1>
+    <h2>Intelligence is your most scarce resource.</h2>
+    <p>The enemy border is a black wall. You cannot see what they are building.<br>Every scout you send costs resources you could spend on weapons.<br>Every unanswered question has a timer.</p>
+    <button class="overlay-btn" id="start-btn">BEGIN MISSION</button>
+    <p style="font-size:11px;color:#555">Left-click: select / move &nbsp;|&nbsp; Right-click: move selected &nbsp;|&nbsp; B: build menu &nbsp;|&nbsp; Esc: pause</p>
+  </div>
+</div>
+
+<script src="entities.js"></script>
+<script src="ai.js"></script>
+<script src="ui.js"></script>
+<script src="game.js"></script>
+</body>
+</html>
