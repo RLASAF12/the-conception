@@ -86,7 +86,8 @@ const UI = (() => {
       const div = document.createElement('div');
       div.className = 'settlement-hp-label';
       div.style.color = color;
-      div.textContent = `${s.name}: ${Math.ceil(s.hp)}/${s.maxHp}`;
+      const incomeText = s.icIncome > 0 ? ` <span style="color:#4aff88;font-size:9px">+${s.icIncome}/s</span>` : '';
+      div.innerHTML = `${s.name}: ${Math.ceil(s.hp)}/${s.maxHp}${incomeText}`;
       settlementHps.appendChild(div);
     }
   }
@@ -275,20 +276,45 @@ const UI = (() => {
     }
   }
 
-  // Attack-move mode indicator
+  // Attack-move / airstrike mode indicator
   let _cmdModeEl = null;
-  function updateCommandMode(attackMoveMode, selected) {
+  function updateCommandMode(attackMoveMode, airstrikeMode, airstrikeAvailable, selected) {
     if (!_cmdModeEl) {
       _cmdModeEl = document.createElement('div');
       _cmdModeEl.id = 'cmd-mode';
       _cmdModeEl.style.cssText = 'position:absolute;bottom:130px;left:50%;transform:translateX(-50%);color:#ff9933;font-size:11px;font-weight:bold;letter-spacing:1px;z-index:10;pointer-events:none;';
       document.getElementById('game-container').appendChild(_cmdModeEl);
     }
-    if (attackMoveMode) {
+    if (airstrikeMode) {
+      _cmdModeEl.style.color = '#ff4444';
+      _cmdModeEl.textContent = '[ AIRSTRIKE — Right-click target ]';
+    } else if (attackMoveMode) {
+      _cmdModeEl.style.color = '#ff9933';
       _cmdModeEl.textContent = '[ ATTACK-MOVE — Right-click destination ]';
+    } else if (airstrikeAvailable) {
+      _cmdModeEl.style.color = '#ff6666';
+      _cmdModeEl.textContent = '[ X — AIRSTRIKE READY ]';
     } else {
+      _cmdModeEl.style.color = '#ff9933';
       const holdUnits = selected && selected.filter(u => u.holdPosition && !u.dead).length;
       _cmdModeEl.textContent = holdUnits > 0 ? `[ ${holdUnits} HOLDING POSITION ]` : '';
+    }
+  }
+
+  // Drone cooldown display
+  let _droneCdEl = null;
+  function updateDroneCooldown(cooldown) {
+    if (!_droneCdEl) {
+      _droneCdEl = document.createElement('div');
+      _droneCdEl.id = 'drone-cd';
+      _droneCdEl.style.cssText = 'position:absolute;top:8px;right:12px;color:#888;font-size:11px;pointer-events:none;';
+      document.getElementById('game-container').appendChild(_droneCdEl);
+    }
+    if (cooldown > 0) {
+      _droneCdEl.textContent = `DRONE COOLDOWN: ${Math.ceil(cooldown)}s`;
+      _droneCdEl.style.color = '#ff8844';
+    } else {
+      _droneCdEl.textContent = '';
     }
   }
 
@@ -297,6 +323,6 @@ const UI = (() => {
     updateSettlementHps, triggerAlertFlash,
     updateSelectionInfo, showBuildMenu, showUpgradePanel,
     showPlacementCursor, hidePlacementCursor, resetVoice,
-    updateGroups, updateCommandMode,
+    updateGroups, updateCommandMode, updateDroneCooldown,
   };
 })();

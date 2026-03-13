@@ -30,7 +30,7 @@ const AI = (() => {
   };
 
   function tick(G, dt) {
-    state.resources += 20 * dt;
+    state.resources = Math.min(state.resources + 20 * dt, 1500);
 
     // Phase transitions
     const elapsed = G.elapsedTime;

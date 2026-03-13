@@ -178,6 +178,7 @@ function createGameState() {
     gameState: 'playing', // playing | paused | win | lose
     upgrades: {},
     airstrikeAvailable: false,
+    airstrikeMode: false,
     buildMode: null, // { type, w, h } or null
     placeCursorCol: 0, placeCursorRow: 0,
     droneCooldown: 0,
@@ -816,10 +817,22 @@ class Game {
     // enemy units
     for (const other of G.units) {
       if (other.dead || other.faction === u.faction) continue;
-      // anti-air only targets flying units
+      // anti-air prioritizes flying units
       if (def.antiAirOnly && !UNIT_DEF[other.type]?.flying) continue;
+      // stealthy units can't be auto-targeted by enemies
+      if (u.faction === 'enemy' && UNIT_DEF[other.type]?.stealthy) continue;
       const dist = Math.hypot(other.col - u.col, other.row - u.row);
       if (dist <= range && dist < bestDist) { best = other; bestDist = dist; }
+    }
+    // anti-air fallback: if no flying targets in range, engage ground units at reduced range
+    if (!best && def.antiAirOnly) {
+      const fallbackRange = (def.attackRange * 0.6) + 0.5;
+      for (const other of G.units) {
+        if (other.dead || other.faction === u.faction) continue;
+        if (u.faction === 'enemy' && UNIT_DEF[other.type]?.stealthy) continue;
+        const dist = Math.hypot(other.col - u.col, other.row - u.row);
+        if (dist <= fallbackRange && dist < bestDist) { best = other; bestDist = dist; }
+      }
     }
     // enemy buildings (only if explicitly ordered or for enemy units)
     if (!best && (def.canAttackBuildings || u.faction === 'enemy')) {
@@ -871,7 +884,7 @@ class Game {
     if (entity.faction === 'player') {
       if (entity.type === 'scout_vehicle') UI.voice('scout_killed');
       if (entity.type === 'drone') {
-        G.droneCooldown = 60;
+        G.droneCooldown = UNIT_DEF.drone.cooldownAfterDeath || 60;
         UI.voice('drone_down');
       }
       if (entity.type === 'barracks') UI.voice('barracks_destroyed');
@@ -923,11 +936,12 @@ class Game {
             G.ic += 2;
             G.icEarnedTiles++;
           }
-          // Check enemy discoveries
-          this._checkDiscoveries(c, r);
         }
       }
     }
+
+    // Check enemy discoveries once per frame (inverted loop for performance)
+    this._checkDiscoveries();
 
     // Ghost fog: enemy units that just left sight get a 4s ghost timer
     for (const u of G.units) {
@@ -941,35 +955,36 @@ class Game {
     }
   }
 
-  _checkDiscoveries(c, r) {
+  _checkDiscoveries() {
     const G = this.G;
+    // Iterate entities once; check if their tile is currently lit (O(entities) not O(tiles × entities))
     for (const u of G.units) {
       if (u.discovered || u.dead || u.faction !== 'enemy') continue;
-      if (Math.floor(u.col) === c && Math.floor(u.row) === r) {
-        u.discovered = true;
-        G.ic += 25;
-        if (!G._firstEnemyUnitFound) {
-          G._firstEnemyUnitFound = true;
-          UI.voice('first_enemy_unit');
-        }
+      const idx = Math.floor(u.row) * COLS + Math.floor(u.col);
+      if (G.fogLit[idx] !== 1) continue;
+      u.discovered = true;
+      G.ic += 25;
+      if (!G._firstEnemyUnitFound) {
+        G._firstEnemyUnitFound = true;
+        UI.voice('first_enemy_unit');
       }
     }
     for (const b of G.buildings) {
       if (b.discovered || b.dead || b.faction !== 'enemy') continue;
       const bc = Math.floor(b.col + b.w / 2);
       const br = Math.floor(b.row + b.h / 2);
-      if (Math.abs(bc - c) <= b.w && Math.abs(br - r) <= b.h) {
-        b.discovered = true;
-        const bonus = G.upgrades.deep_intel ? 100 : 50;
-        if (b.type === 'veil_command') {
-          G.ic += 150;
-          UI.voice('command_base_found');
-        } else {
-          G.ic += bonus;
-          if (!G._firstEnemyBuildingFound) {
-            G._firstEnemyBuildingFound = true;
-            UI.voice('first_enemy_building');
-          }
+      const idx = br * COLS + bc;
+      if (G.fogLit[idx] !== 1) continue;
+      b.discovered = true;
+      const bonus = G.upgrades.deep_intel ? 100 : 50;
+      if (b.type === 'veil_command') {
+        G.ic += 150;
+        UI.voice('command_base_found');
+      } else {
+        G.ic += bonus;
+        if (!G._firstEnemyBuildingFound) {
+          G._firstEnemyBuildingFound = true;
+          UI.voice('first_enemy_building');
         }
       }
     }
@@ -992,8 +1007,9 @@ class Game {
         if (attackers.length === 0) {
           // Uncontested alive settlement: +1 IC/s base income
           G.ic += 1 * dt;
+          b.icIncome = 1;
         } else if (defenders.length > attackers.length) {
-          // Player controls: +3 IC/s
+          // Player controls under pressure: +3 IC/s
           G.ic += 3 * dt;
           b.icIncome = 3;
         } else {
@@ -1082,7 +1098,8 @@ class Game {
     const settlements = G.buildings.filter(b => b.type === 'settlement');
     UI.updateSettlementHps(settlements);
     UI.updateGroups(G.groups, G.units);
-    UI.updateCommandMode(G.attackMoveMode, G.selected);
+    UI.updateCommandMode(G.attackMoveMode, G.airstrikeMode, G.airstrikeAvailable, G.selected);
+    UI.updateDroneCooldown(G.droneCooldown);
   }
 
   // ---- INPUT ----
@@ -1191,6 +1208,34 @@ class Game {
       return;
     }
 
+    // Airstrike mode: deal 200 damage to all enemies within 3 tiles, reveal fog
+    if (G.airstrikeMode && G.airstrikeAvailable) {
+      const tc = pos.col, tr = pos.row;
+      for (const entity of [...G.units, ...G.buildings]) {
+        if (entity.dead || entity.faction !== 'enemy') continue;
+        const ex = entity.col + (entity.w ? entity.w / 2 : 0);
+        const ey = entity.row + (entity.h ? entity.h / 2 : 0);
+        if (Math.hypot(ex - tc, ey - tr) <= 3) {
+          entity.hp -= 200;
+          if (entity.hp <= 0) this._handleDeath(entity);
+        }
+      }
+      // Reveal fog in strike area
+      for (let r2 = Math.max(0, tr - 4); r2 <= Math.min(ROWS - 1, tr + 4); r2++) {
+        for (let c2 = Math.max(0, tc - 4); c2 <= Math.min(COLS - 1, tc + 4); c2++) {
+          if (Math.hypot(c2 + 0.5 - tc, r2 + 0.5 - tr) <= 4) {
+            const idx = r2 * COLS + c2;
+            G.fog[idx] = 1;
+            G.fogOpacity[idx] = 0;
+            G.fogLit[idx] = 1;
+          }
+        }
+      }
+      G.airstrikeAvailable = false;
+      G.airstrikeMode = false;
+      return;
+    }
+
     // Attack-move mode: units engage enemies en route to destination
     if (G.attackMoveMode) {
       for (let i = 0; i < playerUnits.length; i++) {
@@ -1211,13 +1256,17 @@ class Game {
     }
 
     // Regular move order (clears hold position)
+    let anyMoved = false;
     for (let i = 0; i < playerUnits.length; i++) {
       const u = playerUnits[i];
       const offset = _formationOffset(i);
       const tc = Math.max(0, Math.min(COLS - 1, pos.col + offset.dc));
       const tr = Math.max(0, Math.min(ROWS - 1, pos.row + offset.dr));
       const p = _cachedPath(G, Math.floor(u.col), Math.floor(u.row), tc, tr);
-      if (p) { u.path = p; u.attackTarget = null; u.holdPosition = false; u.attackMoveTarget = null; }
+      if (p) { u.path = p; u.attackTarget = null; u.holdPosition = false; u.attackMoveTarget = null; anyMoved = true; }
+    }
+    if (!anyMoved && playerUnits.length > 0) {
+      UI.flashResourceRed(); // no path found — flash HUD as feedback
     }
 
     // If first scout, fire voice
@@ -1252,6 +1301,7 @@ class Game {
     switch (e.key) {
       case 'Escape':
         if (G.attackMoveMode) { G.attackMoveMode = false; break; }
+        if (G.airstrikeMode) { G.airstrikeMode = false; break; }
         if (G.buildMode) { this.cancelBuildMode(); break; }
         if (G.gameState === 'playing') {
           G.gameState = 'paused';
@@ -1270,6 +1320,13 @@ class Game {
       case 'a': case 'A':
         if (G.gameState === 'playing' && !G.buildMode) {
           G.attackMoveMode = !G.attackMoveMode;
+          G.airstrikeMode = false;
+        }
+        break;
+      case 'x': case 'X':
+        if (G.gameState === 'playing' && G.airstrikeAvailable) {
+          G.airstrikeMode = !G.airstrikeMode;
+          G.attackMoveMode = false;
         }
         break;
       case 'h': case 'H':
