@@ -173,7 +173,11 @@ const UI = (() => {
 
   function showBuildMenu(G, onPlace) {
     buildPanel.innerHTML = '';
-    const playerBuildings = ['barracks','quarry','watchtower','wall'];
+    const playerBuildings = [
+      'barracks','quarry','watchtower','wall','fortified_wall',
+      'field_ops','motor_pool','defense_works',
+      'radar_station','bunker','supply_depot','comms_tower','hospital','forward_post',
+    ];
     for (const bType of playerBuildings) {
       const def = BUILDING_DEF[bType];
       const count = G.buildings.filter(b => b.type === bType && b.faction === 'player' && !b.dead).length;

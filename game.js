@@ -47,6 +47,19 @@ function createGameState() {
   eb1.trainTimer = 10;
   buildings.push(eb1);
 
+  // Enemy initial watch post
+  const ewp = createBuilding('veil_watch_post', 8, 4, 'enemy');
+  ewp.buildProgress = 1;
+  _markGrid(grid, 8, 4, 1, 1, 1);
+  ewp.trainTimer = 12;
+  buildings.push(ewp);
+
+  // Enemy initial radar
+  const erad = createBuilding('veil_radar', 5, 17, 'enemy');
+  erad.buildProgress = 1;
+  _markGrid(grid, 5, 17, 1, 1, 1);
+  buildings.push(erad);
+
   // Neutral settlements
   for (const sd of SETTLEMENT_DATA) {
     const s = createSettlement(sd.col, sd.row, sd.name, sd.pop);
@@ -193,10 +206,22 @@ class Renderer {
       const x = u.col * TILE;
       const y = u.row * TILE;
       const def = UNIT_DEF[u.type];
-      const r = u.type === 'tank' ? 10 : u.type === 'drone' ? 7 : 6;
+      const r = (u.type === 'tank' || u.type === 'veil_tank') ? 10 :
+                (u.type === 'drone' || u.type === 'veil_drone') ? 7 :
+                (u.type === 'apc' || u.type === 'artillery' || u.type === 'helicopter') ? 9 : 6;
 
-      ctx.beginPath();
-      ctx.arc(x, y, r, 0, Math.PI * 2);
+      if (def.flying) {
+        // Draw flying units as diamonds
+        ctx.beginPath();
+        ctx.moveTo(x, y - r);
+        ctx.lineTo(x + r, y);
+        ctx.lineTo(x, y + r);
+        ctx.lineTo(x - r, y);
+        ctx.closePath();
+      } else {
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+      }
       ctx.fillStyle = def.color;
       ctx.fill();
       ctx.strokeStyle = u.faction === 'player' ? '#ffffff' : '#330000';
@@ -368,6 +393,7 @@ class Game {
     AI.state.resources = 500;
     AI.state.assaultTriggered = false;
     AI.state.heaviesUnlocked = false;
+    AI.state.tanksUnlocked = false;
 
     setTimeout(() => UI.voice('game_start'), 500);
     this._lastTime = performance.now();
@@ -410,8 +436,24 @@ class Game {
         if (b.buildProgress >= 1) {
           b.buildProgress = 1;
           _markGrid(G.grid, b.col, b.row, b.w, b.h, 1);
+          // comms_tower: grant +1 sight to all existing player units
+          if (b.type === 'comms_tower') {
+            for (const u of G.units) {
+              if (!u.dead && u.faction === 'player') u.sight += 1;
+            }
+          }
         }
         continue;
+      }
+      // hospital: heal nearby player units
+      if (b.type === 'hospital') {
+        const bx = b.col + b.w / 2, by = b.row + b.h / 2;
+        for (const u of G.units) {
+          if (u.dead || u.faction !== 'player') continue;
+          if (Math.hypot(u.col - bx, u.row - by) <= 4) {
+            u.hp = Math.min(u.hp + 3 * dt, u.maxHp);
+          }
+        }
       }
       // training
       if (b.trainQueue && b.trainQueue.length > 0) {
@@ -420,13 +462,16 @@ class Game {
           const uType = b.trainQueue.shift();
           const u = createUnit(uType, b.col + b.w, b.row + b.h - 1, 'player');
           if (uType === 'drone') {
-            const def = UNIT_DEF.drone;
             if (G.upgrades.drone_resilience) { u.hp = 90; u.maxHp = 90; }
           }
           if (uType === 'scout_vehicle') {
             if (G.upgrades.scout_speed_1)    u.speed = UNIT_DEF.scout_vehicle.speed * 1.4;
             if (G.upgrades.extended_reveal_1) u.sight = 10;
           }
+          // Apply comms tower sight bonus to newly trained units
+          const commsTowers = G.buildings.filter(
+            b2 => b2.type === 'comms_tower' && !b2.dead && b2.buildProgress >= 1).length;
+          u.sight += commsTowers;
           G.units.push(u);
           if (b.trainQueue.length > 0) {
             b.trainTimer = UNIT_DEF[b.trainQueue[0]].buildTime;
@@ -459,6 +504,31 @@ class Game {
         }
       }
 
+      const def = UNIT_DEF[u.type];
+
+      // medic: heal nearby allies
+      if (def.healer && u.faction === 'player') {
+        for (const ally of G.units) {
+          if (ally.dead || ally.faction !== 'player' || ally === u) continue;
+          if (Math.hypot(ally.col - u.col, ally.row - u.row) <= 3) {
+            ally.hp = Math.min(ally.hp + 5 * dt, ally.maxHp);
+          }
+        }
+      }
+
+      // engineer: repair nearby friendly buildings
+      if (def.repairTarget && u.faction === 'player') {
+        let repaired = false;
+        for (const b of G.buildings) {
+          if (b.dead || b.faction !== 'player' || b.hp >= b.maxHp || b.buildProgress < 1) continue;
+          if (Math.hypot(b.col + b.w / 2 - u.col, b.row + b.h / 2 - u.row) <= 2) {
+            b.hp = Math.min(b.hp + 10 * dt, b.maxHp);
+            repaired = true;
+            break;
+          }
+        }
+      }
+
       // auto-attack
       u.attackCooldown -= dt;
       if (!u.attackTarget) {
@@ -466,7 +536,6 @@ class Game {
       }
       if (u.attackTarget) {
         if (u.attackTarget.dead) { u.attackTarget = null; continue; }
-        const def = UNIT_DEF[u.type];
         if (!def.damage) { u.attackTarget = null; continue; }
         const range = def.attackRange;
         const tx = u.attackTarget.col + (u.attackTarget.w ? u.attackTarget.w / 2 : 0);
@@ -474,15 +543,20 @@ class Game {
         const dist = Math.hypot(tx - u.col, ty - u.row);
         if (dist > range + 0.5) {
           // move toward target
-          const path = bfsPath(G.grid,
-            Math.floor(u.col), Math.floor(u.row),
-            Math.floor(tx), Math.floor(ty));
-          if (path) u.path = path.slice(0, 6);
+          if (def.flying) {
+            // flying units move directly, ignoring grid
+            u.path = [{ col: Math.floor(tx), row: Math.floor(ty) }];
+          } else {
+            const path = bfsPath(G.grid,
+              Math.floor(u.col), Math.floor(u.row),
+              Math.floor(tx), Math.floor(ty));
+            if (path) u.path = path.slice(0, 6);
+          }
           u.attackTarget = null;
         } else if (u.attackCooldown <= 0) {
           u.attackCooldown = ATTACK_COOLDOWN;
           u.attackTarget.hp -= def.damage;
-          // splash for tanks
+          // splash for tanks, artillery, bombers
           if (def.splash && def.splashRange) {
             for (const other of G.units) {
               if (other === u.attackTarget || other.dead || other.faction === u.faction) continue;
@@ -495,6 +569,10 @@ class Game {
             this._handleDeath(u.attackTarget);
             u.attackTarget = null;
           }
+          // suicide bomber dies after attack
+          if (def.suicideBomber) {
+            this._handleDeath(u);
+          }
         }
       }
     }
@@ -505,12 +583,13 @@ class Game {
     const def = UNIT_DEF[u.type];
     if (!def.damage) return null;
     const range = def.attackRange + 0.5;
-    const oppFaction = u.faction === 'player' ? 'enemy' : 'player';
 
     let best = null, bestDist = Infinity;
     // enemy units
     for (const other of G.units) {
       if (other.dead || other.faction === u.faction) continue;
+      // anti-air only targets flying units
+      if (def.antiAirOnly && !UNIT_DEF[other.type]?.flying) continue;
       const dist = Math.hypot(other.col - u.col, other.row - u.row);
       if (dist <= range && dist < bestDist) { best = other; bestDist = dist; }
     }
@@ -915,7 +994,15 @@ class Game {
 
   _canPlaceAt(col, row, w, h) {
     const G = this.G;
-    if (col < 27 || col + w > COLS || row < 0 || row + h > ROWS) return false; // player zone only
+    const def = BUILDING_DEF[G.buildMode] || {};
+    if (def.forwardPost) {
+      // Forward post can be placed anywhere revealed, not just player zone
+      if (col < 0 || col + w > COLS || row < 0 || row + h > ROWS) return false;
+      const fogIdx = (row + Math.floor(h / 2)) * COLS + (col + Math.floor(w / 2));
+      if (G.fog[fogIdx] !== 1) return false;
+    } else {
+      if (col < 27 || col + w > COLS || row < 0 || row + h > ROWS) return false; // player zone only
+    }
     for (let dc = 0; dc < w; dc++)
       for (let dr = 0; dr < h; dr++)
         if (G.grid[(row + dr) * COLS + (col + dc)] !== 0) return false;
@@ -966,7 +1053,9 @@ class Game {
     if (!G || G.gameState !== 'playing') return;
     const def = UNIT_DEF[uType];
     if (!def) return;
-    if (G.ic < def.cost) { UI.voice('insufficient_resources'); UI.flashResourceRed(); return; }
+    const hasDepot = G.buildings.some(b => b.type === 'supply_depot' && !b.dead && b.buildProgress >= 1);
+    const actualCost = hasDepot ? Math.floor(def.cost * 0.9) : def.cost;
+    if (G.ic < actualCost) { UI.voice('insufficient_resources'); UI.flashResourceRed(); return; }
 
     const activeCount = G.units.filter(u => u.type === uType && u.faction === 'player' && !u.dead).length;
     if (activeCount >= def.maxActive) return;
@@ -977,7 +1066,7 @@ class Game {
 
     if (building.trainQueue.length >= 3) return; // queue full
 
-    G.ic -= def.cost;
+    G.ic -= actualCost;
     building.trainQueue.push(uType);
     if (building.trainQueue.length === 1) {
       building.trainTimer = def.buildTime;
