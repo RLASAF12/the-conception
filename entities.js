@@ -425,6 +425,98 @@ function bfsPath(grid, startCol, startRow, endCol, endRow) {
   return null; // no path
 }
 
+// ---- A* Pathfinding (replaces BFS for smoother, faster paths) ----
+// Uses octile distance heuristic; diagonal cost = 1.414, straight = 1.0
+// Falls back to null if no path found within 800 node expansions.
+function aStarPath(grid, startCol, startRow, endCol, endRow) {
+  if (startCol === endCol && startRow === endRow) return [];
+  const MAX_EXPAND = 800;
+  const SQRT2 = 1.4142135623730951;
+
+  // Min-heap operations (index array: [f, idx, ...])
+  const heap = [];
+  const heapPush = (f, idx) => {
+    heap.push([f, idx]);
+    let i = heap.length - 1;
+    while (i > 0) {
+      const p = (i - 1) >> 1;
+      if (heap[p][0] <= heap[i][0]) break;
+      [heap[p], heap[i]] = [heap[i], heap[p]];
+      i = p;
+    }
+  };
+  const heapPop = () => {
+    const top = heap[0];
+    const last = heap.pop();
+    if (heap.length > 0) {
+      heap[0] = last;
+      let i = 0;
+      while (true) {
+        let s = i, l = 2*i+1, r = 2*i+2;
+        if (l < heap.length && heap[l][0] < heap[s][0]) s = l;
+        if (r < heap.length && heap[r][0] < heap[s][0]) s = r;
+        if (s === i) break;
+        [heap[s], heap[i]] = [heap[i], heap[s]];
+        i = s;
+      }
+    }
+    return top;
+  };
+
+  const SIZE = COLS * ROWS;
+  const gCost = new Float32Array(SIZE).fill(Infinity);
+  const prev = new Int32Array(SIZE).fill(-1);
+  const closed = new Uint8Array(SIZE);
+
+  const startIdx = startRow * COLS + startCol;
+  const endIdx = endRow * COLS + endCol;
+
+  // Octile distance heuristic
+  const heuristic = (c, r) => {
+    const dc = Math.abs(c - endCol), dr = Math.abs(r - endRow);
+    return Math.max(dc, dr) + (SQRT2 - 1) * Math.min(dc, dr);
+  };
+
+  gCost[startIdx] = 0;
+  heapPush(heuristic(startCol, startRow), startIdx);
+
+  const dirs = [[-1,0,1],[1,0,1],[0,-1,1],[0,1,1],[-1,-1,SQRT2],[1,-1,SQRT2],[-1,1,SQRT2],[1,1,SQRT2]];
+  let expanded = 0;
+
+  while (heap.length > 0) {
+    const [, cur] = heapPop();
+    if (closed[cur]) continue;
+    closed[cur] = 1;
+    expanded++;
+    if (expanded > MAX_EXPAND) break;
+
+    if (cur === endIdx) {
+      const path = [];
+      let node = cur;
+      while (node !== startIdx) {
+        path.unshift({ col: node % COLS, row: Math.floor(node / COLS) });
+        node = prev[node];
+      }
+      return path;
+    }
+
+    const cc = cur % COLS, cr = Math.floor(cur / COLS);
+    for (const [dc, dr, cost] of dirs) {
+      const nc = cc + dc, nr = cr + dr;
+      if (nc < 0 || nc >= COLS || nr < 0 || nr >= ROWS) continue;
+      const nIdx = nr * COLS + nc;
+      if (closed[nIdx] || grid[nIdx] === 1) continue;
+      const ng = gCost[cur] + cost;
+      if (ng < gCost[nIdx]) {
+        gCost[nIdx] = ng;
+        prev[nIdx] = cur;
+        heapPush(ng + heuristic(nc, nr), nIdx);
+      }
+    }
+  }
+  return null; // no path found
+}
+
 // ---- Factory functions ----
 let _nextId = 1;
 function mkId() { return _nextId++; }

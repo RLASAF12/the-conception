@@ -58,7 +58,7 @@ const UI = (() => {
   }
 
   function updateResource(ic) {
-    resBar.textContent = `IC: ${ic}`;
+    resBar.textContent = `IC: ${Math.floor(ic)}`;
     resBar.style.color = ic < 50 ? '#ff6666' : '#e8d87a';
   }
 
@@ -253,10 +253,50 @@ const UI = (() => {
     voiceLog.innerHTML = '';
   }
 
+  // Group chips display (bottom-left of HUD)
+  let _groupChipsEl = null;
+  function updateGroups(groups, units) {
+    if (!_groupChipsEl) {
+      _groupChipsEl = document.createElement('div');
+      _groupChipsEl.id = 'group-chips';
+      _groupChipsEl.style.cssText = 'position:absolute;bottom:130px;left:8px;display:flex;gap:4px;z-index:10;';
+      document.getElementById('game-container').appendChild(_groupChipsEl);
+    }
+    _groupChipsEl.innerHTML = '';
+    for (let n = 1; n <= 5; n++) {
+      const ids = new Set(groups[n] || []);
+      if (ids.size === 0) continue;
+      const count = units.filter(u => ids.has(u.id) && !u.dead).length;
+      if (count === 0) continue;
+      const chip = document.createElement('div');
+      chip.style.cssText = 'background:#1a2a18;border:1px solid #4a7a3a;color:#88cc66;font-size:10px;padding:2px 5px;cursor:pointer;';
+      chip.textContent = `[${n}] ${count}`;
+      _groupChipsEl.appendChild(chip);
+    }
+  }
+
+  // Attack-move mode indicator
+  let _cmdModeEl = null;
+  function updateCommandMode(attackMoveMode, selected) {
+    if (!_cmdModeEl) {
+      _cmdModeEl = document.createElement('div');
+      _cmdModeEl.id = 'cmd-mode';
+      _cmdModeEl.style.cssText = 'position:absolute;bottom:130px;left:50%;transform:translateX(-50%);color:#ff9933;font-size:11px;font-weight:bold;letter-spacing:1px;z-index:10;pointer-events:none;';
+      document.getElementById('game-container').appendChild(_cmdModeEl);
+    }
+    if (attackMoveMode) {
+      _cmdModeEl.textContent = '[ ATTACK-MOVE — Right-click destination ]';
+    } else {
+      const holdUnits = selected && selected.filter(u => u.holdPosition && !u.dead).length;
+      _cmdModeEl.textContent = holdUnits > 0 ? `[ ${holdUnits} HOLDING POSITION ]` : '';
+    }
+  }
+
   return {
     voice, updateResource, flashResourceRed, updateTimer,
     updateSettlementHps, triggerAlertFlash,
     updateSelectionInfo, showBuildMenu, showUpgradePanel,
     showPlacementCursor, hidePlacementCursor, resetVoice,
+    updateGroups, updateCommandMode,
   };
 })();

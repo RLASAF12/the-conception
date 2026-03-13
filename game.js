@@ -184,6 +184,16 @@ function createGameState() {
     icEarnedUnits: new Set(),
     icEarnedBuildings: new Set(),
     icEarnedTiles: 0,
+    // Path cache: key = "sc,sr-ec,er" → path array. Invalidated on grid changes.
+    pathCache: new Map(),
+    pathCacheVersion: 0,
+    // Unit command state
+    attackMoveMode: false,
+    groups: {1:[], 2:[], 3:[], 4:[], 5:[]},
+    // Wave/AI state
+    aiBuildPhase: 0,
+    aiWaveTimer: 0,
+    aiLastWaveTime: 0,
   };
 }
 
@@ -204,6 +214,26 @@ function _markRoad(roads, c1, r1, c2, r2) {
     const r = Math.round(r1 + (r2 - r1) * i / steps);
     if (c >= 0 && c < COLS && r >= 0 && r < ROWS) roads.add(r * COLS + c);
   }
+}
+
+// Cached A* pathfinding — avoids recomputing identical paths.
+// Cache is keyed by "sc,sr-ec,er" and version-stamped to grid changes.
+function _cachedPath(G, sc, sr, ec, er) {
+  const key = `${sc},${sr}-${ec},${er}`;
+  const entry = G.pathCache.get(key);
+  if (entry && entry.version === G.pathCacheVersion) return entry.path;
+  const path = aStarPath(G.grid, sc, sr, ec, er);
+  if (G.pathCache.size >= 200) {
+    // Evict oldest entry
+    G.pathCache.delete(G.pathCache.keys().next().value);
+  }
+  G.pathCache.set(key, { path, version: G.pathCacheVersion });
+  return path;
+}
+
+// Call this whenever G.grid changes (building placed/destroyed)
+function _invalidatePathCache(G) {
+  G.pathCacheVersion++;
 }
 
 // ============================================================
@@ -359,8 +389,9 @@ class Renderer {
     for (const u of G.units) {
       if (u.dead) continue;
       const fc = Math.floor(u.row) * COLS + Math.floor(u.col);
-      const visible = u.faction === 'player' || G.fog[fc] === 1;
-      if (!visible) continue;
+      const currentlyVisible = u.faction === 'player' || G.fogLit[fc] === 1;
+      const isGhost = !currentlyVisible && u.faction === 'enemy' && (u.ghostTimer || 0) > 0;
+      if (!currentlyVisible && !isGhost) continue;
 
       const x = u.col * TILE;
       const y = u.row * TILE;
@@ -368,6 +399,9 @@ class Renderer {
       const r = (u.type === 'tank' || u.type === 'veil_tank') ? 10 :
                 (u.type === 'drone' || u.type === 'veil_drone') ? 7 :
                 (u.type === 'apc' || u.type === 'artillery' || u.type === 'helicopter') ? 9 : 6;
+
+      // Ghost units render at reduced opacity
+      if (isGhost) ctx.globalAlpha = 0.35;
 
       if (def.flying) {
         // Draw flying units as diamonds
@@ -387,8 +421,20 @@ class Renderer {
       ctx.lineWidth = 1;
       ctx.stroke();
 
-      // directional dot for moving units
-      if (u.path.length > 0) {
+      // Ghost indicator: question mark above unit
+      if (isGhost) {
+        ctx.globalAlpha = 0.6;
+        ctx.fillStyle = '#ffcc44';
+        ctx.font = 'bold 10px monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText('?', x, y - r - 2);
+        ctx.textAlign = 'left';
+      }
+
+      ctx.globalAlpha = 1;
+
+      // directional dot for moving units (only visible ones)
+      if (!isGhost && u.path.length > 0) {
         const next = u.path[0];
         const dx = next.col + 0.5 - u.col, dy = next.row + 0.5 - u.row;
         const len = Math.hypot(dx, dy) || 1;
@@ -582,6 +628,7 @@ class Game {
     AI.tick(G, dt);
     this._updateUnits(dt);
     this._updateFog();
+    G._settlementDt = dt;
     this._updateSettlements();
     this._checkWinLose();
   }
@@ -595,6 +642,7 @@ class Game {
         if (b.buildProgress >= 1) {
           b.buildProgress = 1;
           _markGrid(G.grid, b.col, b.row, b.w, b.h, 1);
+          _invalidatePathCache(G);
           // comms_tower: grant +1 sight to all existing player units
           if (b.type === 'comms_tower') {
             for (const u of G.units) {
@@ -647,8 +695,28 @@ class Game {
     for (const u of G.units) {
       if (u.dead) continue;
 
-      // movement
-      if (u.path.length > 0 && !u.attackTarget) {
+      // Decrement ghost timer for enemy units
+      if (u.ghostTimer > 0) u.ghostTimer -= dt;
+
+      // Attack-move: check for enemies in range while moving; if found, engage
+      if (u.attackMoveTarget && u.faction === 'player' && !u.attackTarget) {
+        const nearEnemy = this._findAttackTarget(u);
+        if (nearEnemy) {
+          u.attackTarget = nearEnemy;
+          u.path = []; // pause movement to fight
+        }
+      }
+      // Clear attackMoveTarget once destination reached
+      if (u.attackMoveTarget && u.path.length === 0 && !u.attackTarget) {
+        const d = Math.hypot(u.col - (u.attackMoveTarget.col + 0.5), u.row - (u.attackMoveTarget.row + 0.5));
+        if (d < 1.5) u.attackMoveTarget = null;
+      }
+
+      // Hold position: skip movement, still attack in range
+      if (u.holdPosition) {
+        // fall through to auto-attack below, skip path following
+      } else if (u.path.length > 0 && !u.attackTarget) {
+        // movement
         const next = u.path[0];
         const tx = next.col + 0.5, ty = next.row + 0.5;
         const dx = tx - u.col, dy = ty - u.row;
@@ -701,17 +769,18 @@ class Game {
         const ty = u.attackTarget.row + (u.attackTarget.h ? u.attackTarget.h / 2 : 0);
         const dist = Math.hypot(tx - u.col, ty - u.row);
         if (dist > range + 0.5) {
-          // move toward target
-          if (def.flying) {
-            // flying units move directly, ignoring grid
+          // Hold position units don't chase — they lose the target instead
+          if (u.holdPosition) {
+            u.attackTarget = null;
+          } else if (def.flying) {
             u.path = [{ col: Math.floor(tx), row: Math.floor(ty) }];
           } else {
-            const path = bfsPath(G.grid,
+            const path = _cachedPath(G,
               Math.floor(u.col), Math.floor(u.row),
               Math.floor(tx), Math.floor(ty));
             if (path) u.path = path.slice(0, 6);
           }
-          u.attackTarget = null;
+          if (!u.holdPosition) u.attackTarget = null;
         } else if (u.attackCooldown <= 0) {
           u.attackCooldown = ATTACK_COOLDOWN;
           u.attackTarget.hp -= def.damage;
@@ -784,6 +853,18 @@ class Game {
     // Remove from grid if building
     if (entity.w !== undefined) {
       _markGrid(G.grid, entity.col, entity.row, entity.w, entity.h, 0);
+      _invalidatePathCache(G);
+    }
+
+    // IC rewards for destroying enemy entities (offensive incentive)
+    if (entity.faction === 'enemy') {
+      if (entity.w !== undefined) {
+        // Enemy building destroyed
+        G.ic += 30;
+      } else {
+        // Enemy unit killed
+        G.ic += 5;
+      }
     }
 
     // Voice line triggers
@@ -802,6 +883,10 @@ class Game {
 
   _updateFog() {
     const G = this.G;
+
+    // Save previous fogLit state to detect tiles going dark (for ghost fog)
+    const prevFogLit = new Uint8Array(G.fogLit);
+
     // Reset currently-lit array each frame
     G.fogLit.fill(0);
 
@@ -843,6 +928,17 @@ class Game {
         }
       }
     }
+
+    // Ghost fog: enemy units that just left sight get a 4s ghost timer
+    for (const u of G.units) {
+      if (u.dead || u.faction !== 'enemy') continue;
+      const idx = Math.floor(u.row) * COLS + Math.floor(u.col);
+      const wasVisible = prevFogLit[idx] === 1;
+      const isVisible = G.fogLit[idx] === 1;
+      if (wasVisible && !isVisible) {
+        u.ghostTimer = 4.0; // start ghost countdown
+      }
+    }
   }
 
   _checkDiscoveries(c, r) {
@@ -881,13 +977,30 @@ class Game {
 
   _updateSettlements() {
     const G = this.G;
+    const dt = G._settlementDt || 0; // passed from _update via G
     for (const b of G.buildings) {
       if (b.dead || b.type !== 'settlement') continue;
       const bx = b.col + b.w / 2, by = b.row + b.h / 2;
-      const attackers = G.units.filter(u =>
-        !u.dead && u.faction === 'enemy' &&
-        Math.hypot(u.col - bx, u.row - by) <= 3
+      const nearbyUnits = G.units.filter(u =>
+        !u.dead && Math.hypot(u.col - bx, u.row - by) <= 6
       );
+      const attackers = nearbyUnits.filter(u => u.faction === 'enemy');
+      const defenders = nearbyUnits.filter(u => u.faction === 'player');
+
+      // IC income: player controls if more defenders than attackers (or uncontested)
+      if (dt > 0) {
+        if (attackers.length === 0) {
+          // Uncontested alive settlement: +1 IC/s base income
+          G.ic += 1 * dt;
+        } else if (defenders.length > attackers.length) {
+          // Player controls: +3 IC/s
+          G.ic += 3 * dt;
+          b.icIncome = 3;
+        } else {
+          b.icIncome = 0;
+        }
+      }
+
       if (attackers.length > 0 && !b.underAttack) {
         b.underAttack = true;
         if (!b.alertFired) {
@@ -906,6 +1019,7 @@ class Game {
       if (b.hp <= 0 && !b.dead) {
         b.dead = true;
         _markGrid(G.grid, b.col, b.row, b.w, b.h, 0);
+        _invalidatePathCache(G);
         G.settlementsFallen++;
         UI.voice('settlement_falls', b.name, b.population);
         UI.triggerAlertFlash();
@@ -967,6 +1081,8 @@ class Game {
     UI.updateTimer(G.elapsedTime);
     const settlements = G.buildings.filter(b => b.type === 'settlement');
     UI.updateSettlementHps(settlements);
+    UI.updateGroups(G.groups, G.units);
+    UI.updateCommandMode(G.attackMoveMode, G.selected);
   }
 
   // ---- INPUT ----
@@ -1069,23 +1185,39 @@ class Game {
       for (const u of playerUnits) {
         u.attackTarget = target;
         u.path = [];
+        u.holdPosition = false;
+        u.attackMoveTarget = null;
       }
       return;
     }
 
-    // Move order
-    const path = bfsPath(G.grid,
-      Math.floor(playerUnits[0].col), Math.floor(playerUnits[0].row),
-      pos.col, pos.row);
+    // Attack-move mode: units engage enemies en route to destination
+    if (G.attackMoveMode) {
+      for (let i = 0; i < playerUnits.length; i++) {
+        const u = playerUnits[i];
+        const offset = _formationOffset(i);
+        const tc = Math.max(0, Math.min(COLS - 1, pos.col + offset.dc));
+        const tr = Math.max(0, Math.min(ROWS - 1, pos.row + offset.dr));
+        const p = _cachedPath(G, Math.floor(u.col), Math.floor(u.row), tc, tr);
+        if (p) {
+          u.path = p;
+          u.attackMoveTarget = { col: tc, row: tr };
+          u.attackTarget = null;
+          u.holdPosition = false;
+        }
+      }
+      G.attackMoveMode = false;
+      return;
+    }
 
-    // Spread units in a small group formation
+    // Regular move order (clears hold position)
     for (let i = 0; i < playerUnits.length; i++) {
       const u = playerUnits[i];
       const offset = _formationOffset(i);
       const tc = Math.max(0, Math.min(COLS - 1, pos.col + offset.dc));
       const tr = Math.max(0, Math.min(ROWS - 1, pos.row + offset.dr));
-      const p = bfsPath(G.grid, Math.floor(u.col), Math.floor(u.row), tc, tr);
-      if (p) { u.path = p; u.attackTarget = null; }
+      const p = _cachedPath(G, Math.floor(u.col), Math.floor(u.row), tc, tr);
+      if (p) { u.path = p; u.attackTarget = null; u.holdPosition = false; u.attackMoveTarget = null; }
     }
 
     // If first scout, fire voice
@@ -1098,21 +1230,56 @@ class Game {
 
   _onKey(e) {
     if (!this.G) return;
+    const G = this.G;
+
+    // Hotkey groups: Ctrl+1-5 assign, 1-5 recall
+    if (e.ctrlKey && e.key >= '1' && e.key <= '5') {
+      e.preventDefault();
+      const n = parseInt(e.key);
+      G.groups[n] = G.selected.filter(u => u.faction === 'player' && !u.dead).map(u => u.id);
+      return;
+    }
+    if (!e.ctrlKey && e.key >= '1' && e.key <= '5' && G.gameState === 'playing') {
+      const n = parseInt(e.key);
+      const ids = new Set(G.groups[n]);
+      if (ids.size > 0) {
+        G.selected = G.units.filter(u => ids.has(u.id) && !u.dead);
+        UI.updateSelectionInfo(G.selected, G);
+      }
+      return;
+    }
+
     switch (e.key) {
       case 'Escape':
-        if (this.G.buildMode) { this.cancelBuildMode(); break; }
-        if (this.G.gameState === 'playing') {
-          this.G.gameState = 'paused';
+        if (G.attackMoveMode) { G.attackMoveMode = false; break; }
+        if (G.buildMode) { this.cancelBuildMode(); break; }
+        if (G.gameState === 'playing') {
+          G.gameState = 'paused';
           this._showPauseMenu();
-        } else if (this.G.gameState === 'paused') {
-          this.G.gameState = 'playing';
+        } else if (G.gameState === 'paused') {
+          G.gameState = 'playing';
           document.getElementById('overlay').style.display = 'none';
         }
         break;
       case 'b': case 'B':
-        if (this.G.gameState === 'playing') {
-          const cb = this.G.buildings.find(b => b.type === 'command_base' && !b.dead);
-          if (cb) UI.showBuildMenu(this.G, (type) => this._enterBuildMode(type));
+        if (G.gameState === 'playing') {
+          const cb = G.buildings.find(b => b.type === 'command_base' && !b.dead);
+          if (cb) UI.showBuildMenu(G, (type) => this._enterBuildMode(type));
+        }
+        break;
+      case 'a': case 'A':
+        if (G.gameState === 'playing' && !G.buildMode) {
+          G.attackMoveMode = !G.attackMoveMode;
+        }
+        break;
+      case 'h': case 'H':
+        if (G.gameState === 'playing') {
+          const sel = G.selected.filter(u => u.faction === 'player' && !u.dead);
+          for (const u of sel) {
+            u.holdPosition = true;
+            u.path = [];
+            u.attackMoveTarget = null;
+          }
         }
         break;
     }
@@ -1205,6 +1372,7 @@ class Game {
     G.buildings.push(b);
     // mark grid immediately to prevent overlap during construction
     _markGrid(G.grid, col, row, w, h, 1);
+    _invalidatePathCache(G);
 
     this.cancelBuildMode();
     G.selected = [b];
