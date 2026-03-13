@@ -185,6 +185,9 @@ function createGameState() {
     icEarnedUnits: new Set(),
     icEarnedBuildings: new Set(),
     icEarnedTiles: 0,
+    _firstEnemyUnitFound: false,
+    _firstEnemyBuildingFound: false,
+    _firstScoutSent: false,
     // Path cache: key = "sc,sr-ec,er" → path array. Invalidated on grid changes.
     pathCache: new Map(),
     pathCacheVersion: 0,
@@ -650,8 +653,37 @@ class Game {
               if (!u.dead && u.faction === 'player') u.sight += 1;
             }
           }
+          // Voice on first scout vehicle readiness
+          if (b.type === 'motor_pool' && !G._motorPoolBuilt) {
+            G._motorPoolBuilt = true;
+            UI.voice('first_scout');
+          }
         }
         continue;
+      }
+      // radar_station: periodic ping that briefly reveals extra ring around it
+      if (b.type === 'radar_station') {
+        b._pingTimer = (b._pingTimer || 0) - dt;
+        if (b._pingTimer <= 0) {
+          b._pingTimer = 20; // ping every 20 seconds
+          const bcx = b.col + b.w / 2, bcy = b.row + b.h / 2;
+          const pingR = 16; // reveal radius
+          for (let r2 = Math.max(0, Math.floor(bcy - pingR)); r2 <= Math.min(ROWS - 1, Math.ceil(bcy + pingR)); r2++) {
+            for (let c2 = Math.max(0, Math.floor(bcx - pingR)); c2 <= Math.min(COLS - 1, Math.ceil(bcx + pingR)); c2++) {
+              if (Math.hypot(c2 + 0.5 - bcx, r2 + 0.5 - bcy) <= pingR) {
+                const idx = r2 * COLS + c2;
+                if (G.fog[idx] === 0) {
+                  G.fog[idx] = 1;
+                  G.fogOpacity[idx] = 0;
+                  G.ic += 1; // small IC bonus per newly revealed tile
+                  G.icEarnedTiles++;
+                }
+                // Mark as lit this frame so discoveries are checked
+                G.fogLit[idx] = 1;
+              }
+            }
+          }
+        }
       }
       // hospital: heal nearby player units
       if (b.type === 'hospital') {
@@ -1193,22 +1225,7 @@ class Game {
     const pos = this._canvasPos(e);
     const G = this.G;
 
-    const playerUnits = G.selected.filter(u => u.path !== undefined && u.faction === 'player' && !u.dead);
-    if (playerUnits.length === 0) return;
-
-    // Check if right-clicking on an enemy entity to attack
-    const target = this._entityAt(pos.col, pos.row);
-    if (target && target.faction === 'enemy') {
-      for (const u of playerUnits) {
-        u.attackTarget = target;
-        u.path = [];
-        u.holdPosition = false;
-        u.attackMoveTarget = null;
-      }
-      return;
-    }
-
-    // Airstrike mode: deal 200 damage to all enemies within 3 tiles, reveal fog
+    // Airstrike mode: handle before unit checks — does not require selection
     if (G.airstrikeMode && G.airstrikeAvailable) {
       const tc = pos.col, tr = pos.row;
       for (const entity of [...G.units, ...G.buildings]) {
@@ -1236,7 +1253,20 @@ class Game {
       return;
     }
 
-    // Attack-move mode: units engage enemies en route to destination
+    const playerUnits = G.selected.filter(u => u.path !== undefined && u.faction === 'player' && !u.dead);
+    if (playerUnits.length === 0) return;
+
+    // Check if right-clicking on an enemy entity to attack
+    const target = this._entityAt(pos.col, pos.row);
+    if (target && target.faction === 'enemy') {
+      for (const u of playerUnits) {
+        u.attackTarget = target;
+        u.path = [];
+        u.holdPosition = false;
+        u.attackMoveTarget = null;
+      }
+      return;
+    }
     if (G.attackMoveMode) {
       for (let i = 0; i < playerUnits.length; i++) {
         const u = playerUnits[i];
@@ -1469,6 +1499,7 @@ class Game {
     G.ic -= upg.cost;
     upg.apply(G);
     UI.updateSelectionInfo(G.selected, G);
+    if (upg.id === 'emergency_airstrike') UI.voice('airstrike_ready');
   }
 }
 

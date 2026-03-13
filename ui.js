@@ -31,6 +31,7 @@ const UI = (() => {
     barracks_destroyed:  'Barracks is gone. We\'re down to whatever we have in the field.',
     enemy_armory_found_8min: 'They have heavies now. This changes things.',
     insufficient_resources: 'Insufficient resources, Commander.',
+    airstrike_ready:     'Airstrike is live. Press X, then right-click the target.',
     win:                 'Command Base destroyed. It\'s over. For now.',
     lose:                'The line is broken, Commander. We couldn\'t hold them.',
   };
