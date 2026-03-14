@@ -23,6 +23,10 @@
       width: 1280px;
       height: 960px;
       box-shadow: 0 0 40px rgba(0,0,0,0.9);
+      transition: width 0.15s;
+    }
+    #game-container.sidebar-open {
+      width: 1472px; /* 1280 + 192 sidebar */
     }
     #game-canvas {
       display: block;
@@ -328,6 +332,7 @@
       z-index: 20;
       pointer-events: all;
       font-family: 'Courier New', monospace;
+      overflow-y: auto;
     }
     #build-sidebar.sidebar-visible { display: flex; }
     #sidebar-header {

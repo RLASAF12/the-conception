@@ -42,11 +42,14 @@ const UI = (() => {
   // Toggle button
   if (sidebarToggle) {
     sidebarToggle.addEventListener('click', () => {
+      const gc = document.getElementById('game-container');
       if (sidebar.classList.contains('sidebar-visible')) {
         sidebar.classList.remove('sidebar-visible');
+        if (gc) gc.classList.remove('sidebar-open');
         sidebarToggle.style.right = '0';
       } else {
         sidebar.classList.add('sidebar-visible');
+        if (gc) gc.classList.add('sidebar-open');
         sidebarToggle.style.right = '192px';
         if (_sidebarG) _buildSidebarCards(_sidebarG);
       }
@@ -324,6 +327,8 @@ const UI = (() => {
       return;
     }
     sidebar.classList.add('sidebar-visible');
+    const gc = document.getElementById('game-container');
+    if (gc) gc.classList.add('sidebar-open');
     if (sidebarToggle) sidebarToggle.style.right = '192px';
     _buildSidebarCards(G);
   }

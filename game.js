@@ -285,7 +285,7 @@ function _cachedPath(G, sc, sr, ec, er) {
   const key = `${sc},${sr}-${ec},${er}`;
   const entry = G.pathCache.get(key);
   if (entry && entry.version === G.pathCacheVersion) return entry.path;
-  const path = aStarPath(G.grid, sc, sr, ec, er);
+  const path = aStarPath(G.grid, sc, sr, ec, er, G.features, G.roads);
   if (G.pathCache.size >= 200) {
     // Evict oldest entry
     G.pathCache.delete(G.pathCache.keys().next().value);
@@ -468,6 +468,12 @@ class Renderer {
           ctx.stroke();
         }
 
+        // Territory tint — faint green overlay on player-controlled tiles
+        if (this._isInPlayerTerritory(c, r, G)) {
+          ctx.fillStyle = 'rgba(68,170,34,0.07)';
+          ctx.fillRect(x, y, TILE, TILE);
+        }
+
         // Tile grid
         const isSectorEdge = (r % 4 === 0 || c % 4 === 0);
         ctx.strokeStyle = isSectorEdge ? 'rgba(0,0,0,0.14)' : 'rgba(0,0,0,0.07)';
@@ -523,12 +529,32 @@ class Renderer {
         }
       }
 
-      // Build progress bar
+      // Build progress bar + percentage label
       if (b.buildProgress < 1) {
+        // Scaffold crosshatch pattern
+        ctx.save();
+        ctx.strokeStyle = 'rgba(200,180,60,0.18)';
+        ctx.lineWidth = 0.8;
+        for (let si = 0; si < pw + ph; si += 8) {
+          ctx.beginPath(); ctx.moveTo(x + si, y); ctx.lineTo(x + si - ph, y + ph); ctx.stroke();
+        }
+        ctx.restore();
+        // Thicker progress bar
         ctx.fillStyle = '#1a1a1a';
-        ctx.fillRect(x + 2, y + ph - 6, pw - 4, 4);
+        ctx.fillRect(x + 2, y + ph - 8, pw - 4, 6);
         ctx.fillStyle = '#44cc22';
-        ctx.fillRect(x + 2, y + ph - 6, (pw - 4) * b.buildProgress, 4);
+        ctx.fillRect(x + 2, y + ph - 8, (pw - 4) * b.buildProgress, 6);
+        // Percentage text centered on building
+        const pct = Math.floor(b.buildProgress * 100);
+        ctx.save();
+        ctx.font = 'bold 11px monospace';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = '#000';
+        ctx.fillText(pct + '%', x + pw / 2 + 1, y + ph / 2 + 1);
+        ctx.fillStyle = '#ffffff';
+        ctx.fillText(pct + '%', x + pw / 2, y + ph / 2);
+        ctx.restore();
       }
       // Train progress bar
       if (b.trainQueue && b.trainQueue.length > 0 && b.trainTimer > 0) {
@@ -3197,20 +3223,40 @@ class Game {
     return null;
   }
 
+  _isInPlayerTerritory(col, row, G) {
+    for (const b of G.buildings) {
+      if (b.faction !== 'player' || b.dead || b.buildProgress < 1) continue;
+      const def = BUILDING_DEF[b.type];
+      const cr = (def && def.controlRadius) || 3;
+      const bcx = b.col + b.w / 2, bcy = b.row + b.h / 2;
+      const dx = col - bcx, dy = row - bcy;
+      if (dx * dx + dy * dy <= cr * cr) return true;
+    }
+    return false;
+  }
+
   _canPlaceAt(col, row, w, h) {
     const G = this.G;
     const def = BUILDING_DEF[G.buildMode] || {};
+    if (col < 0 || col + w > COLS || row < 0 || row + h > ROWS) return false;
     if (def.forwardPost) {
-      // Forward post can be placed anywhere revealed, not just player zone
-      if (col < 0 || col + w > COLS || row < 0 || row + h > ROWS) return false;
+      // Forward post can be placed anywhere revealed
       const fogIdx = (row + Math.floor(h / 2)) * COLS + (col + Math.floor(w / 2));
       if (G.fog[fogIdx] !== 1) return false;
     } else {
-      if (col < 27 || col + w > COLS || row < 0 || row + h > ROWS) return false; // player zone only
+      // Must be within player territory (near existing buildings)
+      let inTerritory = false;
+      for (let dc = 0; dc < w && !inTerritory; dc++)
+        for (let dr = 0; dr < h && !inTerritory; dr++)
+          if (this._isInPlayerTerritory(col + dc, row + dr, G)) inTerritory = true;
+      if (!inTerritory) return false;
     }
     for (let dc = 0; dc < w; dc++)
-      for (let dr = 0; dr < h; dr++)
-        if (G.grid[(row + dr) * COLS + (col + dc)] !== 0) return false;
+      for (let dr = 0; dr < h; dr++) {
+        const idx = (row + dr) * COLS + (col + dc);
+        if (G.grid[idx] !== 0) return false;
+        if (G.features && G.features[idx] !== 0) return false; // block on trees/rocks/ruins
+      }
     return true;
   }
 
