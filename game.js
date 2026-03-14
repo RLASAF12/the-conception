@@ -1773,6 +1773,9 @@ class Game {
       ['veil_depot','veil_workshop','veil_airbase','veil_foundry'],
     ];
 
+    // Show persistent build sidebar
+    UI.showBuildMenu(this.G, (type) => this._enterBuildMode(type));
+
     setTimeout(() => UI.voice('game_start'), 500);
     this._lastTime = performance.now();
     this._loop(this._lastTime);
@@ -1807,6 +1810,7 @@ class Game {
     this._updateParticles(dt);
     G._settlementDt = dt;
     this._updateSettlements();
+    this._updateBuildingPassives(dt);
     this._checkWinLose();
   }
 
@@ -2567,6 +2571,30 @@ class Game {
     }
   }
 
+  _updateBuildingPassives(dt) {
+    const G = this.G;
+    for (const b of G.buildings) {
+      if (b.dead || b.faction !== 'player' || b.buildProgress < 1) continue;
+
+      // Hospital: regenerate nearby player units +1 HP/sec within 5 tile radius
+      if (b.type === 'hospital') {
+        const cx = b.col + b.w / 2, cy = b.row + b.h / 2;
+        for (const u of G.units) {
+          if (u.dead || u.faction !== 'player') continue;
+          const dist = Math.hypot(u.col - cx, u.row - cy);
+          if (dist <= 5 && u.hp < u.maxHp) {
+            u.hp = Math.min(u.maxHp, u.hp + 1 * dt);
+          }
+        }
+      }
+
+      // Supply Depot: passive +1 IC/sec
+      if (b.type === 'supply_depot') {
+        G.ic += 1 * dt;
+      }
+    }
+  }
+
   _checkWinLose() {
     const G = this.G;
     const ecb = G.buildings.find(b => b.type === 'veil_command');
@@ -2886,8 +2914,7 @@ class Game {
         break;
       case 'b': case 'B':
         if (G.gameState === 'playing') {
-          const cb = G.buildings.find(b => b.type === 'command_base' && !b.dead);
-          if (cb) UI.showBuildMenu(G, (type) => this._enterBuildMode(type));
+          UI.showBuildMenu(G, (type) => this._enterBuildMode(type));
         }
         break;
       case 'a': case 'A':
@@ -3060,6 +3087,13 @@ class Game {
 
     if (!this._canPlaceAt(col, row, w, h)) return; // invalid placement
     if (G.ic < def.cost) { UI.voice('insufficient_resources'); UI.flashResourceRed(); return; }
+
+    // Check building prerequisites
+    const prereqs = def.prereq || [];
+    for (const req of prereqs) {
+      const has = G.buildings.some(b => b.type === req && b.faction === 'player' && !b.dead && b.buildProgress >= 1);
+      if (!has) { UI.voice('insufficient_resources'); UI.flashResourceRed(); return; }
+    }
 
     const maxCount = def.maxCount;
     if (maxCount !== undefined && maxCount !== Infinity) {
