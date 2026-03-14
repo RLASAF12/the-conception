@@ -27,77 +27,82 @@ const BUILDING_DEF = {
   command_base: {
     label: 'Command Base', faction: 'player',
     hp: 500, cost: 0, buildTime: 0, size: [2,2], sight: 6,
-    color: '#2a6acc', trainable: ['drone','helicopter'],
+    color: '#2a6acc', trainable: ['drone','helicopter'], power: +5,
   },
   barracks: {
     label: 'Barracks', faction: 'player',
     hp: 250, cost: 200, buildTime: 20, size: [2,2], sight: 0,
-    color: '#4a7a22', trainable: ['soldier','scout_vehicle','tank','spec_ops'], maxCount: 2,
+    color: '#4a7a22', trainable: ['soldier','scout_vehicle','tank','spec_ops'], maxCount: 2, power: -2,
   },
   quarry: {
     label: 'Quarry', faction: 'player',
     hp: 200, cost: 150, buildTime: 15, size: [1,2], sight: 0,
-    color: '#7a5a28', trainable: [], maxCount: 3,
+    color: '#7a5a28', trainable: [], maxCount: 3, power: 0,
   },
   watchtower: {
     label: 'Watchtower', faction: 'player',
     hp: 150, cost: 100, buildTime: 10, size: [1,1], sight: 8,
-    color: '#3a6a2a', trainable: [], maxCount: 5,
+    color: '#3a6a2a', trainable: [], maxCount: 5, power: -1,
   },
   wall: {
     label: 'Wall', faction: 'player',
     hp: 300, cost: 30, buildTime: 5, size: [1,1], sight: 0,
-    color: '#7a7a7a', trainable: [], maxCount: Infinity,
+    color: '#7a7a7a', trainable: [], maxCount: Infinity, power: 0,
   },
   field_ops: {
     label: 'Field Ops', faction: 'player',
     hp: 220, cost: 175, buildTime: 18, size: [2,2], sight: 0,
-    color: '#4a6a8a', trainable: ['engineer','medic','sniper'], maxCount: 2,
+    color: '#4a6a8a', trainable: ['engineer','medic','sniper'], maxCount: 2, power: -2,
   },
   motor_pool: {
     label: 'Motor Pool', faction: 'player',
     hp: 280, cost: 300, buildTime: 25, size: [2,2], sight: 0,
-    color: '#7a6a22', trainable: ['apc','artillery','harvester'], maxCount: 1,
+    color: '#7a6a22', trainable: ['apc','artillery','harvester'], maxCount: 1, power: -3,
   },
   defense_works: {
     label: 'Defense Works', faction: 'player',
     hp: 240, cost: 225, buildTime: 20, size: [2,2], sight: 0,
-    color: '#4a6a44', trainable: ['anti_air'], maxCount: 2,
+    color: '#4a6a44', trainable: ['anti_air'], maxCount: 2, power: -3,
   },
   radar_station: {
     label: 'Radar Station', faction: 'player',
     hp: 160, cost: 200, buildTime: 15, size: [1,2], sight: 12,
-    color: '#2a8a8a', trainable: [], maxCount: 2,
+    color: '#2a8a8a', trainable: [], maxCount: 2, power: -4,
   },
   bunker: {
     label: 'Bunker', faction: 'player',
     hp: 500, cost: 120, buildTime: 12, size: [1,1], sight: 0,
-    color: '#5a6a5a', trainable: [], maxCount: 6,
+    color: '#5a6a5a', trainable: [], maxCount: 6, power: 0,
   },
   supply_depot: {
     label: 'Supply Depot', faction: 'player',
     hp: 180, cost: 140, buildTime: 14, size: [1,2], sight: 0,
-    color: '#8a7a3a', trainable: [], maxCount: 2,
+    color: '#8a7a3a', trainable: [], maxCount: 2, power: 0,
   },
   comms_tower: {
     label: 'Comms Tower', faction: 'player',
     hp: 120, cost: 160, buildTime: 12, size: [1,1], sight: 5,
-    color: '#2a9a7a', trainable: [], maxCount: 3,
+    color: '#2a9a7a', trainable: [], maxCount: 3, power: -1,
   },
   hospital: {
     label: 'Hospital', faction: 'player',
     hp: 200, cost: 180, buildTime: 16, size: [2,1], sight: 0,
-    color: '#cc3355', trainable: [], maxCount: 2,
+    color: '#cc3355', trainable: [], maxCount: 2, power: -2,
   },
   forward_post: {
     label: 'Forward Post', faction: 'player',
     hp: 150, cost: 100, buildTime: 10, size: [1,1], sight: 4,
-    color: '#4a5a6a', trainable: [], maxCount: 3, forwardPost: true,
+    color: '#4a5a6a', trainable: [], maxCount: 3, forwardPost: true, power: 0,
   },
   fortified_wall: {
     label: 'Fortified Wall', faction: 'player',
     hp: 600, cost: 50, buildTime: 8, size: [1,1], sight: 0,
-    color: '#8a8a8a', trainable: [], maxCount: Infinity,
+    color: '#8a8a8a', trainable: [], maxCount: Infinity, power: 0,
+  },
+  power_plant: {
+    label: 'Power Plant', faction: 'player',
+    hp: 200, cost: 150, buildTime: 12, size: [1,2], sight: 0,
+    color: '#ccaa22', trainable: [], maxCount: 4, power: +8,
   },
   // --- Enemy (Veil) — Soviet red palette ---
   veil_command: {
@@ -189,6 +194,15 @@ const BUILDING_DEF = {
   },
 };
 
+// ---- Armor class damage multiplier table ----
+// Rows = damage type, Cols = armor class [infantry, light, heavy, structure, air]
+const ARMOR_IDX = { infantry: 0, light: 1, heavy: 2, structure: 3, air: 4 };
+const ARMOR_MULT = {
+  small_arms: [ 1.00, 0.50, 0.25, 0.15, 0.75 ],
+  explosive:  [ 1.50, 1.00, 0.75, 1.25, 0.50 ],
+  ap:         [ 0.75, 1.25, 1.50, 0.50, 1.50 ],
+};
+
 // ---- Unit definitions ----
 const UNIT_DEF = {
   // --- Player ---
@@ -197,78 +211,91 @@ const UNIT_DEF = {
     hp: 60, damage: 5, speed: 1.5, sight: 3, cost: 50, buildTime: 8,
     maxActive: 12, color: '#5a8a22', attackRange: 2, splash: false,
     canAttackBuildings: false,
+    armor: 'infantry', dmgType: 'small_arms', projType: 'bullet', projSpeed: 280,
   },
   scout_vehicle: {
     label: 'Scout Vehicle', faction: 'player',
     hp: 80, damage: 8, speed: 2.5, sight: 8, cost: 150, buildTime: 12,
     maxActive: 4, color: '#2a9a7a', attackRange: 2, splash: false,
     canAttackBuildings: false,
+    armor: 'light', dmgType: 'small_arms', projType: 'bullet', projSpeed: 300,
   },
   tank: {
     label: 'Tank', faction: 'player',
     hp: 250, damage: 25, speed: 1.0, sight: 3, cost: 350, buildTime: 25,
     maxActive: 3, color: '#4a6a9a', attackRange: 3, splash: true, splashRange: 1,
     canAttackBuildings: true,
+    armor: 'heavy', dmgType: 'explosive', projType: 'shell', projSpeed: 200,
   },
   drone: {
     label: 'Drone', faction: 'player',
     hp: 40, damage: 0, speed: 3.5, sight: 12, cost: 300, buildTime: 20,
     maxActive: 2, color: '#88ccee', attackRange: 0, splash: false,
     canAttackBuildings: false, cooldownAfterDeath: 60, flying: true,
+    armor: 'air', dmgType: 'small_arms',
   },
   engineer: {
     label: 'Engineer', faction: 'player',
     hp: 50, damage: 3, speed: 1.5, sight: 3, cost: 75, buildTime: 10,
     maxActive: 4, color: '#cc8822', attackRange: 1, splash: false,
     canAttackBuildings: false, repairTarget: true,
+    armor: 'infantry', dmgType: 'small_arms', projType: 'bullet', projSpeed: 260,
   },
   sniper: {
     label: 'Sniper', faction: 'player',
     hp: 45, damage: 20, speed: 1.0, sight: 6, cost: 200, buildTime: 15,
     maxActive: 3, color: '#6a8a5a', attackRange: 4, splash: false,
     canAttackBuildings: false,
+    armor: 'infantry', dmgType: 'ap', projType: 'bullet', projSpeed: 400,
   },
   medic: {
     label: 'Medic', faction: 'player',
     hp: 55, damage: 0, speed: 1.5, sight: 3, cost: 100, buildTime: 10,
     maxActive: 3, color: '#44cc88', attackRange: 0, splash: false,
     canAttackBuildings: false, healer: true,
+    armor: 'infantry', dmgType: 'small_arms',
   },
   spec_ops: {
     label: 'Spec Ops', faction: 'player',
     hp: 70, damage: 12, speed: 2.5, sight: 5, cost: 250, buildTime: 18,
     maxActive: 3, color: '#3344aa', attackRange: 2, splash: false,
     canAttackBuildings: false, stealthy: true,
+    armor: 'infantry', dmgType: 'ap', projType: 'bullet', projSpeed: 320,
   },
   apc: {
     label: 'APC', faction: 'player',
     hp: 180, damage: 6, speed: 2.0, sight: 3, cost: 275, buildTime: 20,
     maxActive: 2, color: '#4a6a88', attackRange: 2, splash: false,
     canAttackBuildings: true,
+    armor: 'light', dmgType: 'small_arms', projType: 'bullet', projSpeed: 290,
   },
   artillery: {
     label: 'Artillery', faction: 'player',
     hp: 200, damage: 40, speed: 0.5, sight: 3, cost: 400, buildTime: 30,
     maxActive: 2, color: '#c8aa28', attackRange: 6, splash: true, splashRange: 2,
     canAttackBuildings: true,
+    armor: 'heavy', dmgType: 'explosive', projType: 'shell', projSpeed: 140,
   },
   helicopter: {
     label: 'Helicopter', faction: 'player',
     hp: 90, damage: 10, speed: 3.0, sight: 7, cost: 320, buildTime: 22,
     maxActive: 2, color: '#5aaa66', attackRange: 3, splash: false,
     canAttackBuildings: true, flying: true,
+    armor: 'air', dmgType: 'explosive', projType: 'missile', projSpeed: 220,
   },
   anti_air: {
     label: 'Anti-Air', faction: 'player',
     hp: 100, damage: 18, speed: 1.0, sight: 4, cost: 180, buildTime: 14,
     maxActive: 3, color: '#cc5566', attackRange: 4, splash: false,
     canAttackBuildings: false, antiAirOnly: true,
+    armor: 'light', dmgType: 'ap', projType: 'missile', projSpeed: 260,
   },
   harvester: {
     label: 'Harvester', faction: 'player',
     hp: 160, damage: 0, speed: 1.2, sight: 3, cost: 220, buildTime: 20,
     maxActive: 2, color: '#ddaa22', attackRange: 0, splash: false,
     canAttackBuildings: false, isHarvester: true,
+    armor: 'light', dmgType: 'small_arms',
   },
   // --- Enemy (Veil) — Soviet red palette ---
   veil_soldier: {
@@ -276,72 +303,84 @@ const UNIT_DEF = {
     hp: 50, damage: 4, speed: 1.5, sight: 3, cost: 0, buildTime: 8,
     maxActive: 999, color: '#cc2222', attackRange: 2, splash: false,
     canAttackBuildings: true,
+    armor: 'infantry', dmgType: 'small_arms', projType: 'bullet', projSpeed: 270,
   },
   veil_raider: {
     label: 'Veil Raider', faction: 'enemy',
     hp: 90, damage: 10, speed: 2.0, sight: 3, cost: 0, buildTime: 10,
     maxActive: 999, color: '#bb1111', attackRange: 2, splash: false,
     canAttackBuildings: true, prioritizeSettlements: true,
+    armor: 'light', dmgType: 'small_arms', projType: 'bullet', projSpeed: 260,
   },
   veil_heavy: {
     label: 'Veil Heavy', faction: 'enemy',
     hp: 300, damage: 30, speed: 0.8, sight: 3, cost: 0, buildTime: 20,
     maxActive: 999, color: '#880000', attackRange: 3, splash: false,
     canAttackBuildings: true, targetCommandBase: true,
+    armor: 'heavy', dmgType: 'ap', projType: 'shell', projSpeed: 180,
   },
   infiltrator: {
     label: 'Infiltrator', faction: 'enemy',
     hp: 40, damage: 6, speed: 2.5, sight: 3, cost: 0, buildTime: 6,
     maxActive: 999, color: '#881a44', attackRange: 1, splash: false,
     canAttackBuildings: true, spawnInsidePerimeter: true,
+    armor: 'infantry', dmgType: 'ap', projType: 'bullet', projSpeed: 300,
   },
   veil_scout: {
     label: 'Veil Scout', faction: 'enemy',
     hp: 35, damage: 2, speed: 3.0, sight: 6, cost: 0, buildTime: 6,
     maxActive: 999, color: '#cc4433', attackRange: 2, splash: false,
     canAttackBuildings: false,
+    armor: 'infantry', dmgType: 'small_arms', projType: 'bullet', projSpeed: 300,
   },
   veil_sniper: {
     label: 'Veil Sniper', faction: 'enemy',
     hp: 40, damage: 18, speed: 0.8, sight: 5, cost: 0, buildTime: 12,
     maxActive: 999, color: '#993322', attackRange: 4, splash: false,
     canAttackBuildings: false, targetWatchtowers: true,
+    armor: 'infantry', dmgType: 'ap', projType: 'bullet', projSpeed: 380,
   },
   veil_engineer: {
     label: 'Veil Engineer', faction: 'enemy',
     hp: 45, damage: 0, speed: 1.5, sight: 2, cost: 0, buildTime: 8,
     maxActive: 999, color: '#884422', attackRange: 0, splash: false,
     canAttackBuildings: false, repairEnemy: true,
+    armor: 'infantry', dmgType: 'small_arms',
   },
   veil_artillery: {
     label: 'Veil Artillery', faction: 'enemy',
     hp: 180, damage: 35, speed: 0.4, sight: 2, cost: 0, buildTime: 20,
     maxActive: 999, color: '#773322', attackRange: 5, splash: true, splashRange: 2,
     canAttackBuildings: true,
+    armor: 'heavy', dmgType: 'explosive', projType: 'shell', projSpeed: 130,
   },
   veil_bomber: {
     label: 'Veil Bomber', faction: 'enemy',
     hp: 30, damage: 50, speed: 2.5, sight: 3, cost: 0, buildTime: 8,
     maxActive: 999, color: '#882233', attackRange: 1, splash: true, splashRange: 1,
     canAttackBuildings: true, suicideBomber: true,
+    armor: 'infantry', dmgType: 'explosive',
   },
   veil_truck: {
     label: 'Veil Troop Truck', faction: 'enemy',
     hp: 120, damage: 5, speed: 2.5, sight: 2, cost: 0, buildTime: 10,
     maxActive: 999, color: '#774422', attackRange: 1, splash: false,
     canAttackBuildings: false, troopDeploy: true,
+    armor: 'light', dmgType: 'small_arms', projType: 'bullet', projSpeed: 270,
   },
   veil_drone: {
     label: 'Veil Drone', faction: 'enemy',
     hp: 30, damage: 0, speed: 3.5, sight: 8, cost: 0, buildTime: 8,
     maxActive: 999, color: '#881122', attackRange: 0, splash: false,
     canAttackBuildings: false, flying: true,
+    armor: 'air', dmgType: 'small_arms',
   },
   veil_tank: {
     label: 'Veil Tank', faction: 'enemy',
     hp: 280, damage: 28, speed: 0.9, sight: 3, cost: 0, buildTime: 22,
     maxActive: 999, color: '#771111', attackRange: 3, splash: false,
     canAttackBuildings: true, targetCommandBase: true,
+    armor: 'heavy', dmgType: 'explosive', projType: 'shell', projSpeed: 190,
   },
 };
 

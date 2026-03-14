@@ -49,6 +49,19 @@
       pointer-events: none;
       text-shadow: 0 0 8px rgba(180,220,40,0.5);
     }
+    /* ── Power grid display ── */
+    #power-display {
+      position: absolute;
+      top: 8px; left: calc(50% + 120px);
+      background: rgba(0,6,0,0.88);
+      border: 1px solid #3a5a1a;
+      border-bottom: 2px solid #4a7a22;
+      padding: 5px 14px;
+      font-size: 13px;
+      letter-spacing: 1px;
+      color: #aaee44;
+      pointer-events: none;
+    }
     /* ── Commander comms log ── */
     #voice-log {
       position: absolute;
@@ -272,6 +285,7 @@
   <div id="ui-overlay">
     <div id="timer-display">00:00</div>
     <div id="resource-bar">IC: 200</div>
+    <div id="power-display">⚡ +0</div>
     <div id="voice-log"></div>
     <div id="settlement-hps"></div>
     <div id="alert-flash"></div>

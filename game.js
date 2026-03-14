@@ -230,6 +230,8 @@ function createGameState() {
     fog, fogOpacity, fogLit, grid, buildings, units,
     tileColors, roads, features, riverTiles,
     particles: [],
+    projectiles: [],
+    powerLevel: 0,
     selected: [],
     settlementsFallen: 0,
     gameState: 'playing', // playing | paused | win | lose
@@ -347,6 +349,7 @@ class Renderer {
     this._drawTerrain(ctx, G);
     this._drawBuildings(ctx, G);
     this._drawUnits(ctx, G);
+    this._drawProjectiles(ctx, G);
     this._drawParticles(ctx, G);
     this._drawFog(ctx, G);
     this._drawSelectionHighlights(ctx, G);
@@ -1321,6 +1324,49 @@ class Renderer {
     ctx.globalAlpha = 1;
   }
 
+  // ─── PROJECTILES ────────────────────────────────────────────
+  _drawProjectiles(ctx, G) {
+    if (!G.projectiles || G.projectiles.length === 0) return;
+    for (const p of G.projectiles) {
+      const dx = p.tx - p.x, dy = p.ty - p.y;
+      const dist = Math.hypot(dx, dy);
+      if (dist < 0.1) continue;
+      const nx = dx / dist, ny = dy / dist;
+      ctx.globalAlpha = 0.9;
+      if (p.type === 'bullet') {
+        // Short yellow line
+        const len = Math.min(dist, p.speed * 0.04);
+        ctx.strokeStyle = '#ffe840';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(p.x, p.y);
+        ctx.lineTo(p.x - nx * len, p.y - ny * len);
+        ctx.stroke();
+      } else if (p.type === 'shell') {
+        // Orange circle
+        ctx.fillStyle = '#ff7700';
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 3, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (p.type === 'missile') {
+        // White dot with small trail
+        ctx.fillStyle = '#ffffff';
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 3.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(200,200,255,0.5)';
+        ctx.lineWidth = 2;
+        const tlen = Math.min(dist, 18);
+        ctx.beginPath();
+        ctx.moveTo(p.x, p.y);
+        ctx.lineTo(p.x - nx * tlen, p.y - ny * tlen);
+        ctx.stroke();
+      }
+    }
+    ctx.globalAlpha = 1;
+    ctx.lineWidth = 1;
+  }
+
   // ─── MINIMAP ────────────────────────────────────────────────
   _drawMinimap(G) {
     const mctx = this.mctx;
@@ -1504,6 +1550,66 @@ function _spawnExplosion(G, px, py, size) {
 }
 
 // ============================================================
+// PROJECTILE SYSTEM HELPERS
+// ============================================================
+
+// Spawn a traveling projectile for ranged combat
+function _spawnProjectile(G, shooter, target, def, tx, ty) {
+  const projType = def.projType;
+  if (!projType) return false; // no projectile — instant damage fallback
+  const ax = shooter.col * TILE, ay = shooter.row * TILE;
+  G.projectiles.push({
+    x: ax, y: ay,
+    tx: tx * TILE, ty: ty * TILE,
+    damage: def.damage,
+    dmgType: def.dmgType || 'small_arms',
+    splash: def.splash, splashRange: def.splashRange,
+    target,         // ref for on-arrival damage; may die before arrival
+    shooter,        // for kill credit
+    speed: def.projSpeed || 180,
+    type: projType, // 'bullet' | 'shell' | 'missile' | 'laser'
+    life: 3.0,      // failsafe TTL
+  });
+  return true;
+}
+
+// Emit continuous damage smoke/fire from wounded entities
+function _emitDamageSmoke(G, dt) {
+  for (const e of [...G.units, ...G.buildings]) {
+    if (e.dead) continue;
+    const pct = e.hp / e.maxHp;
+    if (pct > 0.5) continue;
+    if (!e._smokeTimer) e._smokeTimer = 0;
+    e._smokeTimer += dt;
+    const rate = pct <= 0.25 ? 0.15 : 0.35;
+    if (e._smokeTimer < rate) continue;
+    e._smokeTimer = 0;
+    const px = (e.col + (e.w ? e.w / 2 : 0)) * TILE;
+    const py = (e.row + (e.h ? e.h / 2 : 0)) * TILE;
+    if (pct <= 0.25) {
+      _spawnHit(G, px, py, e.faction === 'enemy');
+    } else {
+      G.particles.push({
+        x: px + (Math.random() - 0.5) * 8, y: py,
+        vx: (Math.random() - 0.5) * 8, vy: -15 - Math.random() * 10,
+        life: 0.8 + Math.random() * 0.5, maxLife: 1.3,
+        r: 4 + Math.random() * 3, rgb: '160,160,160', type: 'smoke', grav: 0,
+      });
+    }
+  }
+}
+
+// Recompute power balance from all player buildings
+function _calcPower(G) {
+  let total = 0;
+  for (const b of G.buildings) {
+    if (b.dead || b.faction !== 'player' || b.buildProgress < 1) continue;
+    total += BUILDING_DEF[b.type].power || 0;
+  }
+  G.powerLevel = total;
+}
+
+// ============================================================
 // GAME CLASS
 // ============================================================
 class Game {
@@ -1594,9 +1700,12 @@ class Game {
     G.elapsedTime += dt;
     if (G.droneCooldown > 0) G.droneCooldown -= dt;
 
+    _calcPower(G);
     this._updateBuildings(dt);
     AI.tick(G, dt);
     this._updateUnits(dt);
+    this._updateProjectiles(dt);
+    _emitDamageSmoke(G, dt);
     this._updateFog();
     this._updateParticles(dt);
     G._settlementDt = dt;
@@ -1628,8 +1737,9 @@ class Game {
         }
         continue;
       }
-      // radar_station: periodic ping that briefly reveals extra ring around it
+      // radar_station: periodic ping — disabled when grid is underpowered
       if (b.type === 'radar_station') {
+        if (G.powerLevel < 0) { b._pingTimer = 20; continue; } // dark — skip
         b._pingTimer = (b._pingTimer || 0) - dt;
         if (b._pingTimer <= 0) {
           b._pingTimer = 20; // ping every 20 seconds
@@ -1662,9 +1772,10 @@ class Game {
           }
         }
       }
-      // training
+      // training — slows by 40% when grid is underpowered
       if (b.trainQueue && b.trainQueue.length > 0) {
-        b.trainTimer -= dt;
+        const powerDrain = G.powerLevel < 0 ? 1 / 1.4 : 1.0;
+        b.trainTimer -= dt * powerDrain;
         if (b.trainTimer <= 0) {
           const uType = b.trainQueue.shift();
           const u = createUnit(uType, b.col + b.w, b.row + b.h - 1, 'player');
@@ -1748,6 +1859,13 @@ class Game {
             const p = _cachedPath(G, Math.floor(u.col), Math.floor(u.row), nextWp.col, nextWp.row);
             if (p) u.path = p;
           }
+          // Patrol: loop between two waypoints
+          if (u.path.length === 0 && u.patrolPoints && !u.attackTarget) {
+            u.patrolIdx = 1 - (u.patrolIdx || 0);
+            const wp = u.patrolPoints[u.patrolIdx];
+            const p = _cachedPath(G, Math.floor(u.col), Math.floor(u.row), wp.col, wp.row);
+            if (p) u.path = p;
+          }
           // Dequeue queued attack when path exhausted
           if (u.path.length === 0 && u._queuedAttack && !u._queuedAttack.dead) {
             u.attackTarget = u._queuedAttack;
@@ -1818,6 +1936,21 @@ class Game {
 
       const def = UNIT_DEF[u.type];
 
+      // Follow command: re-path toward followed unit every 4 steps
+      if (u.followTarget && u.faction === 'player') {
+        const ft = G.units.find(u2 => u2.id === u.followTarget && !u2.dead);
+        if (ft) {
+          const fdist = Math.hypot(ft.col - u.col, ft.row - u.row);
+          if (fdist > 1.5 && u.path.length === 0) {
+            const p = _cachedPath(G, Math.floor(u.col), Math.floor(u.row),
+              Math.floor(ft.col), Math.floor(ft.row));
+            if (p) u.path = p.slice(0, 4);
+          }
+        } else {
+          u.followTarget = null;
+        }
+      }
+
       // harvester: autonomous seek→harvest→return→unload loop
       if (def.isHarvester && u.faction === 'player') {
         if (!u.harvState) u.harvState = 'seeking';
@@ -1887,7 +2020,7 @@ class Game {
         }
       }
 
-      // engineer: repair nearby friendly buildings
+      // engineer: repair nearby friendly buildings + capture neutral/enemy buildings
       if (def.repairTarget && u.faction === 'player') {
         let repaired = false;
         for (const b of G.buildings) {
@@ -1896,6 +2029,29 @@ class Game {
             b.hp = Math.min(b.hp + 10 * dt, b.maxHp);
             repaired = true;
             break;
+          }
+        }
+        // Capture logic: walk into neutral/damaged-enemy buildings
+        if (!repaired) {
+          for (const b of G.buildings) {
+            if (b.dead || b.faction === 'player') continue;
+            const dist = Math.hypot(b.col + b.w / 2 - u.col, b.row + b.h / 2 - u.row);
+            if (dist > 1.2) continue;
+            if (b.faction === 'neutral') {
+              b.faction = 'player';
+              G.ic += 50;
+              _spawnHit(G, (b.col + b.w / 2) * TILE, (b.row + b.h / 2) * TILE, false);
+              break;
+            }
+            if (b.faction === 'enemy' && b.hp / b.maxHp < 0.35) {
+              b.faction = 'player';
+              b.hp = Math.round(b.maxHp * 0.25);
+              _markGrid(G.grid, b.col, b.row, b.w, b.h, 1);
+              _invalidatePathCache(G);
+              G.ic += 100;
+              _spawnHit(G, (b.col + b.w / 2) * TILE, (b.row + b.h / 2) * TILE, false);
+              break;
+            }
           }
         }
       }
@@ -1927,14 +2083,12 @@ class Game {
           if (!u.holdPosition) u.attackTarget = null;
         } else if (u.attackCooldown <= 0) {
           u.attackCooldown = ATTACK_COOLDOWN;
-          u.attackTarget.hp -= def.damage;
 
-          // ── Muzzle flash + hit spark particles ──
+          // ── Muzzle flash ──
           const ax = u.col * TILE, ay = u.row * TILE;
           const bx2 = tx * TILE, by2 = ty * TILE;
           const shotAngle = Math.atan2(by2 - ay, bx2 - ax);
           _spawnMuzzle(G, ax, ay, shotAngle);
-          _spawnHit(G, bx2, by2, u.attackTarget.faction === 'enemy');
 
           // ── Shoot sound based on unit type ──
           switch (def.label) {
@@ -1946,36 +2100,42 @@ class Game {
             default: SFX.shootInfantry(); break;
           }
 
-          // splash for tanks, artillery, bombers
-          if (def.splash && def.splashRange) {
-            _spawnExplosion(G, bx2, by2, def.splashRange >= 2 ? 'large' : 'small');
-            for (const other of G.units) {
-              if (other === u.attackTarget || other.dead || other.faction === u.faction) continue;
-              if (Math.hypot(other.col - tx, other.row - ty) <= def.splashRange) {
-                other.hp -= def.damage * 0.5;
+          // ── Spawn traveling projectile (or instant hit for units without projType) ──
+          const launched = _spawnProjectile(G, u, u.attackTarget, def, tx, ty);
+          if (!launched || def.suicideBomber) {
+            // Instant damage fallback (melee / suicide bombers)
+            const dmgType  = def.dmgType || 'small_arms';
+            const armorCls = (UNIT_DEF[u.attackTarget.type] || BUILDING_DEF[u.attackTarget.type])?.armor || 'structure';
+            const mult = ARMOR_MULT[dmgType]?.[ARMOR_IDX[armorCls]] ?? 1.0;
+            u.attackTarget.hp -= def.damage * mult;
+            _spawnHit(G, bx2, by2, u.attackTarget.faction === 'enemy');
+            if (def.splash && def.splashRange) {
+              _spawnExplosion(G, bx2, by2, def.splashRange >= 2 ? 'large' : 'small');
+              for (const other of G.units) {
+                if (other === u.attackTarget || other.dead || other.faction === u.faction) continue;
+                if (Math.hypot(other.col - tx, other.row - ty) <= def.splashRange) {
+                  const aCls = UNIT_DEF[other.type]?.armor || 'infantry';
+                  const sm = ARMOR_MULT[dmgType]?.[ARMOR_IDX[aCls]] ?? 1.0;
+                  other.hp -= def.damage * 0.5 * sm;
+                }
               }
             }
-          }
-          if (u.attackTarget.hp <= 0) {
-            // Veterancy: credit the kill to the attacker
-            if (u.faction === 'player' && u.attackTarget.path !== undefined) {
-              u.kills = (u.kills || 0) + 1;
-              const prevStars = u.stars || 0;
-              u.stars = u.kills >= 20 ? 3 : u.kills >= 10 ? 2 : u.kills >= 5 ? 1 : 0;
-              if (u.stars > prevStars) {
-                // Star-up: apply bonus
-                const bonus = [0, 1.10, 1.20, 1.35][u.stars];
-                u.damage = Math.round(UNIT_DEF[u.type].damage * bonus);
-                u.maxHp   = Math.round(UNIT_DEF[u.type].hp    * (1 + (u.stars - 1) * 0.08));
-                u.hp = Math.min(u.hp + 20, u.maxHp);
+            if (u.attackTarget.hp <= 0) {
+              if (u.faction === 'player' && u.attackTarget.path !== undefined) {
+                u.kills = (u.kills || 0) + 1;
+                const prevStars = u.stars || 0;
+                u.stars = u.kills >= 20 ? 3 : u.kills >= 10 ? 2 : u.kills >= 5 ? 1 : 0;
+                if (u.stars > prevStars) {
+                  const bonus = [0, 1.10, 1.20, 1.35][u.stars];
+                  u.damage = Math.round(UNIT_DEF[u.type].damage * bonus);
+                  u.maxHp   = Math.round(UNIT_DEF[u.type].hp    * (1 + (u.stars - 1) * 0.08));
+                  u.hp = Math.min(u.hp + 20, u.maxHp);
+                }
               }
+              this._handleDeath(u.attackTarget);
+              u.attackTarget = null;
             }
-            this._handleDeath(u.attackTarget);
-            u.attackTarget = null;
-          }
-          // suicide bomber dies after attack
-          if (def.suicideBomber) {
-            this._handleDeath(u);
+            if (def.suicideBomber) this._handleDeath(u);
           }
         }
       }
@@ -2191,6 +2351,71 @@ class Game {
     }
   }
 
+  _updateProjectiles(dt) {
+    const G = this.G;
+    const projs = G.projectiles;
+    for (let i = projs.length - 1; i >= 0; i--) {
+      const p = projs[i];
+      p.life -= dt;
+      if (p.life <= 0) { projs.splice(i, 1); continue; }
+
+      const dx = p.tx - p.x, dy = p.ty - p.y;
+      const dist = Math.hypot(dx, dy);
+      const step = p.speed * dt;
+
+      if (dist <= step + 4) {
+        // Arrived — apply damage
+        projs.splice(i, 1);
+        if (!p.target || p.target.dead) continue; // target died already
+
+        const dmgType  = p.dmgType || 'small_arms';
+        const armorCls = (UNIT_DEF[p.target.type] || BUILDING_DEF[p.target.type])?.armor || 'structure';
+        const mult = ARMOR_MULT[dmgType]?.[ARMOR_IDX[armorCls]] ?? 1.0;
+        p.target.hp -= p.damage * mult;
+
+        _spawnHit(G, p.tx, p.ty, p.target.faction === 'enemy');
+
+        // Splash
+        if (p.splash && p.splashRange) {
+          _spawnExplosion(G, p.tx, p.ty, p.splashRange >= 2 ? 'large' : 'small');
+          const tcol = p.tx / TILE, trow = p.ty / TILE;
+          for (const other of G.units) {
+            if (other === p.target || other.dead || other.faction === p.shooter.faction) continue;
+            if (Math.hypot(other.col - tcol, other.row - trow) <= p.splashRange) {
+              const aCls = UNIT_DEF[other.type]?.armor || 'infantry';
+              const sm = ARMOR_MULT[dmgType]?.[ARMOR_IDX[aCls]] ?? 1.0;
+              other.hp -= p.damage * 0.5 * sm;
+              if (other.hp <= 0 && !other.dead) this._handleDeath(other);
+            }
+          }
+        }
+
+        // Kill check
+        if (p.target.hp <= 0 && !p.target.dead) {
+          // Veterancy kill credit
+          const shooter = p.shooter;
+          if (shooter && !shooter.dead && shooter.faction === 'player' && p.target.path !== undefined) {
+            shooter.kills = (shooter.kills || 0) + 1;
+            const prevStars = shooter.stars || 0;
+            shooter.stars = shooter.kills >= 20 ? 3 : shooter.kills >= 10 ? 2 : shooter.kills >= 5 ? 1 : 0;
+            if (shooter.stars > prevStars) {
+              const bonus = [0, 1.10, 1.20, 1.35][shooter.stars];
+              shooter.damage = Math.round(UNIT_DEF[shooter.type].damage * bonus);
+              shooter.maxHp  = Math.round(UNIT_DEF[shooter.type].hp * (1 + (shooter.stars - 1) * 0.08));
+              shooter.hp = Math.min(shooter.hp + 20, shooter.maxHp);
+            }
+          }
+          this._handleDeath(p.target);
+          if (p.shooter && p.shooter.attackTarget === p.target) p.shooter.attackTarget = null;
+        }
+      } else {
+        // Move toward target
+        p.x += (dx / dist) * step;
+        p.y += (dy / dist) * step;
+      }
+    }
+  }
+
   _updateSettlements() {
     const G = this.G;
     const dt = G._settlementDt || 0; // passed from _update via G
@@ -2296,6 +2521,7 @@ class Game {
     const G = this.G;
     UI.updateResource(G.ic);
     UI.updateTimer(G.elapsedTime);
+    UI.updatePower(G.powerLevel);
     const settlements = G.buildings.filter(b => b.type === 'settlement');
     UI.updateSettlementHps(settlements);
     UI.updateGroups(G.groups, G.units);
@@ -2509,7 +2735,9 @@ class Game {
         const p = _cachedPath(G, Math.floor(u.col), Math.floor(u.row), tc, tr);
         if (p) {
           u.path = p; u.attackTarget = null; u.holdPosition = false;
-          u.attackMoveTarget = null; u.pathQueue = []; anyMoved = true;
+          u.attackMoveTarget = null; u.pathQueue = [];
+          u.patrolPoints = null; u.followTarget = null; // cancel patrol/follow
+          anyMoved = true;
         }
       }
     }
@@ -2600,6 +2828,59 @@ class Game {
               const nearApc = G.units.find(u => !u.dead && u.type === 'apc' && u.faction === 'player' &&
                 Math.hypot(u.col - anyUnit.col, u.row - anyUnit.row) <= 2.5);
               if (nearApc) this._loadIntoAPC(nearApc);
+            }
+          }
+        }
+        break;
+      case 'p': case 'P':
+        if (G.gameState === 'playing') {
+          // Patrol: toggle between current position and the last queued waypoint
+          const patrolUnits = G.selected.filter(u => u.faction === 'player' && !u.dead && u.path !== undefined);
+          for (const u of patrolUnits) {
+            if (u.patrolPoints) {
+              // Cancel patrol
+              u.patrolPoints = null;
+              u.patrolIdx = 0;
+            } else if (u.pathQueue && u.pathQueue.length > 0) {
+              // Set patrol between current position and first queued waypoint
+              const wp = u.pathQueue[0];
+              u.patrolPoints = [
+                { col: Math.floor(u.col), row: Math.floor(u.row) },
+                { col: wp.col, row: wp.row },
+              ];
+              u.patrolIdx = 0;
+              u.pathQueue = [];
+              u.path = [];
+              // Kick off first leg immediately
+              const p = _cachedPath(G, Math.floor(u.col), Math.floor(u.row), wp.col, wp.row);
+              if (p) u.path = p;
+            }
+          }
+        }
+        break;
+      case 'f': case 'F':
+        if (G.gameState === 'playing') {
+          // Follow: selected units follow the clicked/hovered unit
+          // Toggle: if already following, cancel
+          const followSel = G.selected.filter(u => u.faction === 'player' && !u.dead && u.path !== undefined);
+          // If all already following same target, cancel
+          const allFollowing = followSel.every(u => u.followTarget);
+          if (allFollowing && followSel.length > 0) {
+            for (const u of followSel) { u.followTarget = null; }
+          } else {
+            // Find the nearest non-selected friendly unit to the selection center
+            if (followSel.length > 0) {
+              const cx = followSel.reduce((s, u) => s + u.col, 0) / followSel.length;
+              const cy = followSel.reduce((s, u) => s + u.row, 0) / followSel.length;
+              const selIds = new Set(followSel.map(u => u.id));
+              const leader = G.units.find(u2 => !u2.dead && u2.faction === 'player' && !selIds.has(u2.id) &&
+                Math.hypot(u2.col - cx, u2.row - cy) <= 4);
+              if (leader) {
+                for (const u of followSel) {
+                  u.followTarget = leader.id;
+                  u.patrolPoints = null;
+                }
+              }
             }
           }
         }

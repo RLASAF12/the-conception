@@ -63,6 +63,14 @@ const UI = (() => {
     resBar.style.color = ic < 50 ? '#ff6666' : '#e8d87a';
   }
 
+  function updatePower(level) {
+    const el = document.getElementById('power-display');
+    if (!el) return;
+    const sign = level >= 0 ? '+' : '';
+    el.textContent = `⚡ ${sign}${level}`;
+    el.style.color = level >= 0 ? '#aaee44' : level >= -3 ? '#eecc22' : '#ff4444';
+  }
+
   function flashResourceRed() {
     resBar.style.color = '#ff2222';
     resBar.style.borderColor = '#ff2222';
@@ -127,9 +135,11 @@ const UI = (() => {
       const starStr = e.stars > 0 ? '  ' + '★'.repeat(e.stars) + ` (${e.kills} kills)` : '';
       const garStr  = (e.type === 'apc' && e.loadedUnits && e.loadedUnits.length > 0)
         ? `  Garrison: ${e.loadedUnits.length}/3 — press G near infantry to load, Right-click APC to unload` : '';
-      const queueStr = (e.pathQueue && e.pathQueue.length > 0) ? `  Waypoints: ${e.pathQueue.length}` : '';
+      const queueStr = (e.pathQueue && e.pathQueue.length > 0) ? `  Waypoints queued: ${e.pathQueue.length} — press P to patrol` : '';
+      const patrolStr = e.patrolPoints ? '  [PATROL — press P to cancel]' : '';
+      const followStr = e.followTarget ? '  [FOLLOWING — press F to cancel]' : (def.damage ? '  Shift+right-click waypoint then P=patrol, F=follow' : '');
       selName.textContent = def.label + starStr;
-      selDet.textContent = `HP: ${Math.ceil(e.hp)}/${e.maxHp}  Speed: ${e.speed.toFixed(1)}  Sight: ${e.sight}${garStr}${queueStr}`;
+      selDet.textContent = `HP: ${Math.ceil(e.hp)}/${e.maxHp}  Speed: ${e.speed.toFixed(1)}  Sight: ${e.sight}${garStr}${queueStr}${patrolStr}${followStr}`;
       selQueue.textContent = '';
       _renderBuildPanel(null, G);
     } else {
@@ -190,6 +200,7 @@ const UI = (() => {
       'barracks','quarry','watchtower','wall','fortified_wall',
       'field_ops','motor_pool','defense_works',
       'radar_station','bunker','supply_depot','comms_tower','hospital','forward_post',
+      'power_plant',
     ];
     for (const bType of playerBuildings) {
       const def = BUILDING_DEF[bType];
@@ -433,7 +444,7 @@ const UI = (() => {
   }
 
   return {
-    voice, updateResource, flashResourceRed, updateTimer,
+    voice, updateResource, flashResourceRed, updateTimer, updatePower,
     updateSettlementHps, triggerAlertFlash,
     updateSelectionInfo, showBuildMenu, showUpgradePanel,
     showPlacementCursor, hidePlacementCursor, resetVoice,
