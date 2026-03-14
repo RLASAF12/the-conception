@@ -5,7 +5,43 @@
 const TICK_RATE = 1 / 60;
 const ATTACK_COOLDOWN = 0.5; // seconds between attacks
 
-// Settlement names & populations
+// ---- Mission definitions ----
+const MISSION_DATA = [
+  {
+    id: 1,
+    title: 'Operation Veil',
+    subtitle: 'Hold the settlements. Destroy the enemy command.',
+    desc: 'Three civilian settlements stand between you and the Veil. Keep them alive while you push west to eliminate the Command Base.',
+    settlements: [
+      { col: 17, row: 7,  name: 'Kerem',  pop: 1200 },
+      { col: 19, row: 19, name: 'Havela', pop: 800  },
+      { col: 23, row: 13, name: 'Misgav', pop: 950  },
+    ],
+    playerBase: { col: 35, row: 14 },
+    enemyBase: { col: 3, row: 13 },
+    startIc: 200,
+    waveInterval: 90,
+  },
+  {
+    id: 2,
+    title: 'Operation Spectre',
+    subtitle: 'Urban corridor. No room to maneuver.',
+    desc: 'The Veil controls a fortified urban corridor. Enemy forces are denser and waves come faster. Infiltrators spawn earlier. Protect the supply lines at all costs.',
+    settlements: [
+      { col: 25, row: 5,  name: 'Arvat',   pop: 600  },
+      { col: 21, row: 14, name: 'Dekel',   pop: 1100 },
+      { col: 26, row: 22, name: 'Tsipori', pop: 750  },
+    ],
+    playerBase: { col: 34, row: 14 },
+    enemyBase: { col: 2, row: 14 },
+    startIc: 150,        // less starting IC
+    waveInterval: 65,    // faster waves
+  },
+];
+
+let _currentMission = MISSION_DATA[0]; // default mission 1
+
+// Settlement names & populations — resolved from active mission at game start
 const SETTLEMENT_DATA = [
   { col: 17, row: 7,  name: 'Kerem',   pop: 1200 },
   { col: 19, row: 19, name: 'Havela',  pop: 800  },
@@ -28,49 +64,69 @@ function createGameState() {
   const buildings = [];
   const units = [];
 
-  // Player Command Base at col 35, row 14 (center)
-  const cb = createBuilding('command_base', 35, 14, 'player');
+  const missionDef = _currentMission;
+
+  // Player Command Base
+  const pbCol = missionDef.playerBase.col, pbRow = missionDef.playerBase.row;
+  const cb = createBuilding('command_base', pbCol, pbRow, 'player');
   cb.buildProgress = 1;
-  _markGrid(grid, 35, 14, 2, 2, 1);
+  _markGrid(grid, pbCol, pbRow, 2, 2, 1);
   buildings.push(cb);
 
-  // Enemy Command Base (hidden, col 3, row 13)
-  const ecb = createBuilding('veil_command', 3, 13, 'enemy');
+  // Enemy Command Base (hidden)
+  const ebCol = missionDef.enemyBase.col, ebRow = missionDef.enemyBase.row;
+  const ecb = createBuilding('veil_command', ebCol, ebRow, 'enemy');
   ecb.buildProgress = 1;
-  _markGrid(grid, 3, 13, 2, 2, 1);
+  _markGrid(grid, ebCol, ebRow, 2, 2, 1);
   buildings.push(ecb);
 
-  // Enemy initial barracks
-  const eb1 = createBuilding('veil_barracks', 6, 10, 'enemy');
+  // Enemy initial barracks (near enemy base)
+  const ebc1 = Math.min(ebCol + 3, 11), ebr1 = Math.max(ebRow - 3, 2);
+  const eb1 = createBuilding('veil_barracks', ebc1, ebr1, 'enemy');
   eb1.buildProgress = 1;
-  _markGrid(grid, 6, 10, 2, 2, 1);
+  _markGrid(grid, ebc1, ebr1, 2, 2, 1);
   eb1.trainTimer = 10;
   buildings.push(eb1);
 
   // Enemy initial watch post
-  const ewp = createBuilding('veil_watch_post', 8, 4, 'enemy');
+  const ewpc = Math.min(ebCol + 5, 13), ewpr = Math.max(2, ebRow - 10);
+  const ewp = createBuilding('veil_watch_post', ewpc, ewpr, 'enemy');
   ewp.buildProgress = 1;
-  _markGrid(grid, 8, 4, 1, 1, 1);
+  _markGrid(grid, ewpc, ewpr, 1, 1, 1);
   ewp.trainTimer = 12;
   buildings.push(ewp);
 
   // Enemy initial radar
-  const erad = createBuilding('veil_radar', 5, 17, 'enemy');
+  const eradc = Math.min(ebCol + 2, 10), eradr = Math.min(ebRow + 4, ROWS - 2);
+  const erad = createBuilding('veil_radar', eradc, eradr, 'enemy');
   erad.buildProgress = 1;
-  _markGrid(grid, 5, 17, 1, 1, 1);
+  _markGrid(grid, eradc, eradr, 1, 1, 1);
   buildings.push(erad);
 
-  // Neutral settlements
-  for (const sd of SETTLEMENT_DATA) {
+  // Neutral settlements — from mission definition
+  for (const sd of missionDef.settlements) {
     const s = createSettlement(sd.col, sd.row, sd.name, sd.pop);
     s.buildProgress = 1;
     _markGrid(grid, sd.col, sd.row, 2, 2, 1);
     buildings.push(s);
   }
 
+  // Intel caches: scattered resource nodes across neutral/enemy zones
+  const INTEL_CACHE_SPOTS = [
+    [18,  5], [22, 10], [20, 20], [24, 25],  // neutral zone
+    [14, 17], [16,  3], [25, 14],             // closer to river / deep neutral
+  ];
+  for (const [ic_col, ic_row] of INTEL_CACHE_SPOTS) {
+    const ic = createBuilding('intel_cache', ic_col, ic_row, 'neutral');
+    ic.buildProgress = 1;
+    ic.icRemaining = 300;
+    _markGrid(grid, ic_col, ic_row, 1, 1, 0); // passable — harvesters walk onto it
+    buildings.push(ic);
+  }
+
   // Player starting units: 3 soldiers near command base
   for (let i = 0; i < 3; i++) {
-    units.push(createUnit('soldier', 33 + i, 15, 'player'));
+    units.push(createUnit('soldier', pbCol - 2 + i, pbRow + 1, 'player'));
   }
 
   // ---- Terrain enrichment precomputation ----
@@ -169,7 +225,7 @@ function createGameState() {
   }
 
   return {
-    ic: 200,
+    ic: missionDef.startIc,
     elapsedTime: 0,
     fog, fogOpacity, fogLit, grid, buildings, units,
     tileColors, roads, features, riverTiles,
@@ -752,6 +808,21 @@ class Renderer {
         fill('#551111', x+3,y+13,5,ph-26); fill('#551111', x+pw-8,y+13,5,ph-26);
         stroke('#cc2222', 2, x+2,y+2,pw-4,ph-4); break;
       }
+      /* ── INTEL CACHE ── */
+      case 'intel_cache': {
+        // Pulsing blue glow — crate full of intel
+        const pulse = 0.45 + 0.3 * Math.abs(Math.sin(this._frame * 0.05));
+        ctx.fillStyle = `rgba(30,80,180,${pulse})`;
+        ctx.beginPath(); ctx.arc(x+pw/2,y+ph/2,pw/2+2,0,Math.PI*2); ctx.fill();
+        fill('#1a3a6a', x+3,y+3,pw-6,ph-6);
+        fill('#2a5aaa', x+5,y+5,pw-10,7); // lid highlight
+        // stencil lines
+        ctx.strokeStyle='rgba(80,160,255,0.7)'; ctx.lineWidth=1;
+        ctx.beginPath(); ctx.moveTo(x+4,y+ph/2); ctx.lineTo(x+pw-4,y+ph/2); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(x+pw/2,y+4); ctx.lineTo(x+pw/2,y+ph-4); ctx.stroke();
+        stroke('rgba(100,180,255,0.8)', 1.5, x+2,y+2,pw-4,ph-4);
+        break;
+      }
       /* ── DEFAULT fallback ── */
       default: {
         fill(mc, x+2,y+2,pw-4,ph-4);
@@ -1056,6 +1127,32 @@ class Renderer {
         ctx.beginPath(); ctx.arc(0,0,2,0,Math.PI*2); ctx.fill();
         ctx.fillStyle = 'rgba(80,140,255,0.85)';
         ctx.beginPath(); ctx.arc(0,0,1,0,Math.PI*2); ctx.fill();
+        break;
+      }
+      /* ─ HARVESTER ─ */
+      case 'harvester': {
+        ctx.fillStyle = shadow;
+        ctx.beginPath(); ctx.ellipse(0,7,13,5,0,0,Math.PI*2); ctx.fill();
+        // tracks
+        ctx.fillStyle = '#2a2a2a';
+        ctx.fillRect(-11,-6,4,12); ctx.fillRect(7,-6,4,12);
+        ctx.fillStyle = '#3a3a3a';
+        for (let ti=-5;ti<7;ti+=2.5) {
+          ctx.fillRect(-11,ti,4,1.5); ctx.fillRect(7,ti,4,1.5);
+        }
+        // body — wide yellow industrial
+        ctx.fillStyle = dk; ctx.fillRect(-7,-5,14,10);
+        ctx.fillStyle = color; ctx.fillRect(-6,-4,12,8);
+        ctx.fillStyle = lt; ctx.fillRect(-5,-4,10,3);
+        // collection arm
+        ctx.strokeStyle = '#2a2a2a'; ctx.lineWidth = 3;
+        ctx.beginPath(); ctx.moveTo(6,0); ctx.lineTo(13,-4); ctx.stroke();
+        ctx.fillStyle = '#ddaa22';
+        ctx.beginPath(); ctx.arc(13,-4,3,0,Math.PI*2); ctx.fill();
+        // IC indicator — small glowing blue light
+        ctx.fillStyle = 'rgba(80,180,255,0.9)';
+        ctx.beginPath(); ctx.arc(-2,0,2.5,0,Math.PI*2); ctx.fill();
+        ctx.strokeStyle = outlineC; ctx.lineWidth = 1.5; ctx.strokeRect(-7,-5,14,10);
         break;
       }
       /* ─ DEFAULT fallback ─ */
@@ -1374,11 +1471,35 @@ class Game {
   }
 
   _showStartScreen() {
-    document.getElementById('overlay').style.display = 'flex';
-    document.getElementById('start-btn').onclick = () => {
-      document.getElementById('overlay').style.display = 'none';
-      this.start();
-    };
+    const overlay = document.getElementById('overlay');
+    overlay.innerHTML = `
+      <h1>THE CONCEPTION</h1>
+      <h2>Intelligence is your most scarce resource.</h2>
+      <p style="font-size:12px;color:#4a6a38;max-width:520px;text-align:center;line-height:1.8">Select your mission, Commander.</p>
+      <div id="mission-select" style="display:flex;gap:16px;margin:8px 0"></div>
+      <p style="font-size:11px;color:#555">Left-click: select &nbsp;|&nbsp; Right-click: move &nbsp;|&nbsp; A+Right-click: attack-move &nbsp;|&nbsp; H: hold position &nbsp;|&nbsp; Ctrl+1-5: group &nbsp;|&nbsp; B: build &nbsp;|&nbsp; X: airstrike &nbsp;|&nbsp; Esc: pause</p>
+    `;
+    const ms = overlay.querySelector('#mission-select');
+    for (const mission of MISSION_DATA) {
+      const card = document.createElement('div');
+      card.style.cssText = 'border:1px solid #2a5a18;padding:14px;width:230px;cursor:pointer;background:rgba(0,8,0,0.7);transition:all 0.15s;text-align:left;';
+      card.innerHTML = `
+        <div style="font-size:13px;color:#88ee44;letter-spacing:2px;margin-bottom:6px">MISSION ${mission.id}</div>
+        <div style="font-size:12px;color:#6aaa44;margin-bottom:6px">${mission.title}</div>
+        <div style="font-size:10px;color:#4a6a38;line-height:1.6">${mission.subtitle}</div>
+        <div style="font-size:9px;color:#3a5a28;margin-top:8px;line-height:1.5">${mission.desc}</div>
+        <div style="font-size:9px;color:#ccee44;margin-top:8px">Start IC: ${mission.startIc} &nbsp;|&nbsp; Wave: ${mission.waveInterval}s</div>
+      `;
+      card.onmouseover = () => { card.style.borderColor = '#44ff22'; card.style.background = 'rgba(20,50,10,0.8)'; };
+      card.onmouseout = () => { card.style.borderColor = '#2a5a18'; card.style.background = 'rgba(0,8,0,0.7)'; };
+      card.onclick = () => {
+        _currentMission = mission;
+        overlay.style.display = 'none';
+        this.start();
+      };
+      ms.appendChild(card);
+    }
+    overlay.style.display = 'flex';
   }
 
   start() {
@@ -1389,9 +1510,14 @@ class Game {
     UI.resetVoice();
     AI.state.buildIndex = 0;
     AI.state.resources = 500;
-    AI.state.assaultTriggered = false;
     AI.state.heaviesUnlocked = false;
     AI.state.tanksUnlocked = false;
+    AI.state.waveTimer = _currentMission.waveInterval;
+    AI.state.buildQueues = [
+      ['veil_barracks','veil_barracks'],
+      ['armory','tunnel_entrance','rocket_platform','veil_watch_post'],
+      ['veil_depot','veil_workshop','veil_airbase','veil_foundry'],
+    ];
 
     setTimeout(() => UI.voice('game_start'), 500);
     this._lastTime = performance.now();
@@ -1502,9 +1628,12 @@ class Game {
           const commsTowers = G.buildings.filter(
             b2 => b2.type === 'comms_tower' && !b2.dead && b2.buildProgress >= 1).length;
           u.sight += commsTowers;
+          if (G.upgrades.field_comms) u.sight += 1;
+          if (G.upgrades.ghost_protocol && uType === 'spec_ops') u.damage = Math.round(u.damage * 1.25);
           G.units.push(u);
           if (b.trainQueue.length > 0) {
-            b.trainTimer = UNIT_DEF[b.trainQueue[0]].buildTime;
+            const mult = G.upgrades.rapid_training ? 0.8 : 1.0;
+            b.trainTimer = UNIT_DEF[b.trainQueue[0]].buildTime * mult;
           }
         }
       }
@@ -1554,7 +1683,82 @@ class Game {
         }
       }
 
+      // Separation steering: push overlapping units apart (boid-style repulsion)
+      if (!u.holdPosition) {
+        for (const other of G.units) {
+          if (other === u || other.dead) continue;
+          const sdx = u.col - other.col, sdy = u.row - other.row;
+          const sd = Math.hypot(sdx, sdy);
+          if (sd < 0.85 && sd > 0.01) {
+            const f = (0.85 - sd) * 1.8 * dt;
+            u.col += (sdx / sd) * f;
+            u.row += (sdy / sd) * f;
+            u.col = Math.max(0, Math.min(COLS - 0.5, u.col));
+            u.row = Math.max(0, Math.min(ROWS - 0.5, u.row));
+          }
+        }
+      }
+
       const def = UNIT_DEF[u.type];
+
+      // harvester: autonomous seek→harvest→return→unload loop
+      if (def.isHarvester && u.faction === 'player') {
+        if (!u.harvState) u.harvState = 'seeking';
+        if (!u.harvestedIc) u.harvestedIc = 0;
+        const CARRY_MAX = 100;
+
+        if (u.harvState === 'seeking') {
+          // Find nearest intel_cache with IC remaining
+          let bestCache = null, bestDist = Infinity;
+          for (const b of G.buildings) {
+            if (b.type !== 'intel_cache' || b.dead || (b.icRemaining || 0) <= 0) continue;
+            const d = Math.hypot(b.col - u.col, b.row - u.row);
+            if (d < bestDist) { bestDist = d; bestCache = b; }
+          }
+          if (bestCache) {
+            u.harvestTarget = bestCache;
+            const path = _cachedPath(G, Math.floor(u.col), Math.floor(u.row),
+              bestCache.col, bestCache.row);
+            if (path) { u.path = path; u.harvState = 'moving_to_cache'; }
+          }
+        } else if (u.harvState === 'moving_to_cache') {
+          if (u.path.length === 0) {
+            // arrived — check if target still has IC
+            if (u.harvestTarget && !u.harvestTarget.dead && (u.harvestTarget.icRemaining || 0) > 0) {
+              u.harvState = 'harvesting';
+              u.harvestTimer = 0;
+            } else {
+              u.harvState = 'seeking';
+            }
+          }
+        } else if (u.harvState === 'harvesting') {
+          u.harvestTimer += dt;
+          if (u.harvestTimer >= 1.0 && u.harvestTarget && !u.harvestTarget.dead) {
+            const amount = Math.min(10, u.harvestTarget.icRemaining || 0, CARRY_MAX - u.harvestedIc);
+            u.harvestedIc += amount;
+            u.harvestTarget.icRemaining = (u.harvestTarget.icRemaining || 0) - amount;
+            u.harvestTimer = 0;
+            if (u.harvestedIc >= CARRY_MAX || (u.harvestTarget.icRemaining || 0) <= 0) {
+              u.harvState = 'returning';
+              // Path back to command base
+              const cb = G.buildings.find(b => b.type === 'command_base' && !b.dead);
+              if (cb) {
+                const path = _cachedPath(G, Math.floor(u.col), Math.floor(u.row),
+                  cb.col + 1, cb.row + 1);
+                if (path) u.path = path;
+              }
+            }
+          }
+        } else if (u.harvState === 'returning') {
+          if (u.path.length === 0) {
+            // Unload at command base
+            G.ic += u.harvestedIc;
+            u.harvestedIc = 0;
+            u.harvState = 'seeking';
+          }
+        }
+        continue; // harvesters don't auto-attack
+      }
 
       // medic: heal nearby allies
       if (def.healer && u.faction === 'player') {
@@ -2323,7 +2527,8 @@ class Game {
     G.ic -= actualCost;
     building.trainQueue.push(uType);
     if (building.trainQueue.length === 1) {
-      building.trainTimer = def.buildTime;
+      const trainMult = G.upgrades.rapid_training ? 0.8 : 1.0;
+      building.trainTimer = def.buildTime * trainMult;
     }
     UI.updateSelectionInfo(G.selected, G);
   }

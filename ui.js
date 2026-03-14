@@ -204,32 +204,134 @@ const UI = (() => {
   }
 
   function showUpgradePanel(G) {
+    // Build visual tech tree
     upgradeList.innerHTML = '';
+
+    // Canvas-based tree rendering
+    const CELL_W = 128, CELL_H = 74, PAD_X = 16, PAD_Y = 12;
+    const maxTx = Math.max(...UPGRADE_DEF.map(u => u.tx)) + 1;
+    const maxTy = Math.max(...UPGRADE_DEF.map(u => u.ty)) + 1;
+    const cw = maxTx * (CELL_W + PAD_X) + PAD_X;
+    const ch = maxTy * (CELL_H + PAD_Y) + PAD_Y;
+
+    const cv = document.createElement('canvas');
+    cv.width = cw; cv.height = ch;
+    cv.style.display = 'block';
+    upgradeList.appendChild(cv);
+    const ctx = cv.getContext('2d');
+
+    // Helper: cell top-left pixel
+    const cellX = tx => PAD_X + tx * (CELL_W + PAD_X);
+    const cellY = ty => PAD_Y + ty * (CELL_H + PAD_Y);
+
+    // Draw connector lines first
+    for (const upg of UPGRADE_DEF) {
+      if (!upg.prereq) continue;
+      const from = UPGRADE_DEF.find(u => u.id === upg.prereq);
+      if (!from) continue;
+      const fx = cellX(from.tx) + CELL_W, fy = cellY(from.ty) + CELL_H / 2;
+      const tx2 = cellX(upg.tx), ty2 = cellY(upg.ty) + CELL_H / 2;
+      ctx.strokeStyle = G.upgrades[upg.prereq] ? '#44aa22' : '#2a4a18';
+      ctx.lineWidth = 2;
+      ctx.setLineDash(G.upgrades[upg.prereq] ? [] : [4, 3]);
+      ctx.beginPath();
+      ctx.moveTo(fx, fy);
+      const mx = (fx + tx2) / 2;
+      ctx.bezierCurveTo(mx, fy, mx, ty2, tx2, ty2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    // Draw nodes
     for (const upg of UPGRADE_DEF) {
       const already = G.upgrades[upg.id];
       const prereqMet = !upg.prereq || G.upgrades[upg.prereq];
       const bldgMet = !upg.prereqBuilding ||
         G.buildings.filter(b => b.type === upg.prereqBuilding && !b.dead).length >= (upg.prereqBuildingCount || 1);
       const canAfford = G.ic >= upg.cost;
+      const available = !already && prereqMet && bldgMet;
 
-      const row = document.createElement('div');
-      row.className = 'upgrade-item';
-      row.innerHTML = `
-        <span>${upg.label} — ${upg.desc}</span>
-        <span class="cost">${upg.cost} IC</span>
-        <button id="upg-${upg.id}" ${already || !prereqMet || !bldgMet || !canAfford ? 'disabled' : ''}>
-          ${already ? 'DONE' : 'BUY'}
-        </button>`;
-      const btn = row.querySelector('button');
-      if (!already && prereqMet && bldgMet && canAfford) {
-        btn.onclick = () => {
+      const nx = cellX(upg.tx), ny = cellY(upg.ty);
+
+      // Node background
+      ctx.fillStyle = already ? 'rgba(20,60,10,0.95)' :
+                      available ? 'rgba(0,15,0,0.95)' : 'rgba(0,5,0,0.88)';
+      ctx.strokeStyle = already ? '#44cc22' : available ? '#2a8a18' : '#1a3a10';
+      ctx.lineWidth = already ? 2 : 1;
+      ctx.beginPath();
+      ctx.roundRect(nx, ny, CELL_W, CELL_H, 3);
+      ctx.fill(); ctx.stroke();
+
+      // Status tint
+      if (already) {
+        ctx.fillStyle = 'rgba(40,120,20,0.18)';
+        ctx.beginPath(); ctx.roundRect(nx, ny, CELL_W, CELL_H, 3); ctx.fill();
+      }
+
+      // Label
+      ctx.font = 'bold 10px Courier New';
+      ctx.fillStyle = already ? '#88ff44' : available ? '#88cc44' : '#3a5a28';
+      ctx.fillText(upg.label, nx + 6, ny + 16);
+
+      // Desc
+      ctx.font = '9px Courier New';
+      ctx.fillStyle = already ? '#66aa44' : '#4a6a38';
+      // word-wrap simple
+      const words = upg.desc.split(' ');
+      let line = '', lineY = ny + 30;
+      for (const word of words) {
+        const test = line ? line + ' ' + word : word;
+        if (ctx.measureText(test).width > CELL_W - 12) {
+          ctx.fillText(line, nx + 6, lineY); lineY += 11; line = word;
+        } else { line = test; }
+      }
+      if (line) ctx.fillText(line, nx + 6, lineY);
+
+      // Cost & button
+      const btnY = ny + CELL_H - 18;
+      ctx.font = '9px Courier New';
+      if (already) {
+        ctx.fillStyle = '#44cc22';
+        ctx.fillText('✓ DONE', nx + 6, btnY + 11);
+      } else {
+        ctx.fillStyle = canAfford && available ? '#ccee44' : '#4a5a28';
+        ctx.fillText(`${upg.cost} IC`, nx + 6, btnY + 11);
+        // Buy button
+        const btnX = nx + CELL_W - 40;
+        ctx.fillStyle = (available && canAfford) ? '#1a4a10' : '#0a1a08';
+        ctx.strokeStyle = (available && canAfford) ? '#44aa22' : '#1a3a10';
+        ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.roundRect(btnX, btnY, 34, 14, 2); ctx.fill(); ctx.stroke();
+        ctx.font = 'bold 9px Courier New';
+        ctx.fillStyle = (available && canAfford) ? '#88ff44' : '#2a4a20';
+        ctx.fillText('BUY', btnX + 8, btnY + 10);
+      }
+    }
+
+    // Click handler
+    cv.onclick = (e) => {
+      const rect = cv.getBoundingClientRect();
+      const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+      for (const upg of UPGRADE_DEF) {
+        const already = G.upgrades[upg.id];
+        if (already) continue;
+        const prereqMet = !upg.prereq || G.upgrades[upg.prereq];
+        const bldgMet = !upg.prereqBuilding ||
+          G.buildings.filter(b => b.type === upg.prereqBuilding && !b.dead).length >= (upg.prereqBuildingCount || 1);
+        const canAfford = G.ic >= upg.cost;
+        if (!prereqMet || !bldgMet || !canAfford) continue;
+        const nx = cellX(upg.tx), ny = cellY(upg.ty);
+        const btnX = nx + CELL_W - 40, btnY = ny + CELL_H - 18;
+        if (mx >= btnX && mx <= btnX + 34 && my >= btnY && my <= btnY + 14) {
           if (window.G) window.G.purchaseUpgrade(upg);
           showUpgradePanel(G);
-        };
+          return;
+        }
       }
-      upgradeList.appendChild(row);
-    }
+    };
+
     upgradePanel.style.display = 'block';
+    upgradePanel.style.width = (cw + 36) + 'px';
   }
 
   document.getElementById('close-upgrade').onclick = () => {

@@ -1,5 +1,5 @@
 // ============================================================
-// AI.JS — Enemy (Veil) AI logic
+// AI.JS — Enemy (Veil) AI logic — FSM-enhanced
 // ============================================================
 
 const AI = (() => {
@@ -13,6 +13,9 @@ const AI = (() => {
     ['veil_depot', 'veil_workshop', 'veil_airbase', 'veil_foundry'],
   ];
 
+  // Per-unit AI states
+  const STATE = { IDLE: 'idle', PATROL: 'patrol', ASSAULT: 'assault', RETREAT: 'retreat', GUARD: 'guard' };
+
   // Internal AI state
   const state = {
     buildQueues: [
@@ -21,12 +24,9 @@ const AI = (() => {
       [...BUILD_PHASE[2]],
     ],
     resources: 500,
-    assaultTriggered: false,
     heaviesUnlocked: false,
     tanksUnlocked: false,
-    droneDeathCooldown: 0,
     waveTimer: 90,      // first wave fires at 90s mark
-    lastPhaseCheck: 0,
   };
 
   function tick(G, dt) {
@@ -46,7 +46,7 @@ const AI = (() => {
 
     _build(G);
     _train(G, dt);
-    _moveUnits(G, dt);
+    _updateFSM(G, dt);
 
     // Wave timer: start from phase 1, every 90s
     if (G.aiBuildPhase >= 1) {
@@ -56,8 +56,6 @@ const AI = (() => {
         state.waveTimer = 90;
       }
     }
-
-    if (state.droneDeathCooldown > 0) state.droneDeathCooldown -= dt;
 
     // unlock heavies at 8 minutes
     if (elapsed >= 480 && !state.heaviesUnlocked) {
@@ -152,9 +150,137 @@ const AI = (() => {
         }
 
         const u = createUnit(unitType, spawnCol, spawnRow, 'enemy');
+        // Initialize FSM state
+        u.aiState = STATE.IDLE;
+        u.aiStateTimer = 5 + Math.random() * 10; // idle duration before patrol/assault
+        // 15% of units start as guards (stay near base to defend)
+        if (Math.random() < 0.15) {
+          u.aiState = STATE.GUARD;
+          u.aiStateTimer = 30 + Math.random() * 30;
+        }
         G.units.push(u);
         b.trainTimer = UNIT_DEF[unitType].buildTime + Math.random() * 5;
       }
+    }
+  }
+
+  // Main per-unit FSM update
+  function _updateFSM(G, dt) {
+    const enemyUnits = G.units.filter(u => u.faction === 'enemy' && !u.dead);
+
+    for (const u of enemyUnits) {
+      const def = UNIT_DEF[u.type];
+      if (!u.aiState) u.aiState = STATE.IDLE;
+      if (u.aiStateTimer === undefined) u.aiStateTimer = 0;
+
+      // HP-based retreat transition (any state)
+      if (u.hp / u.maxHp < 0.25 && u.col > 8 && u.aiState !== STATE.RETREAT) {
+        u.aiState = STATE.RETREAT;
+        u.path = [];
+        u.attackTarget = null;
+        u.retreating = true;
+      }
+      // Recover from retreat
+      if (u.aiState === STATE.RETREAT && u.hp / u.maxHp >= 0.55 && u.col <= 8) {
+        u.aiState = STATE.IDLE;
+        u.aiStateTimer = 8 + Math.random() * 8;
+        u.retreating = false;
+      }
+
+      u.aiStateTimer -= dt;
+
+      switch (u.aiState) {
+        case STATE.IDLE:
+          // Engineers repair immediately; no idle wait
+          if (def.repairEnemy) { _doRepair(u, G, dt); break; }
+          // Drone/scout: patrol after short idle
+          if (u.aiStateTimer <= 0) {
+            const isScout = (u.type === 'veil_scout' || u.type === 'veil_drone');
+            u.aiState = isScout ? STATE.PATROL : STATE.ASSAULT;
+            u.aiStateTimer = isScout ? (20 + Math.random() * 20) : 0;
+          }
+          break;
+
+        case STATE.PATROL: {
+          // Scouts patrol the boundary col 12-16, random row
+          if (u.path.length === 0 && !u.attackTarget) {
+            const patrolRow = 3 + Math.floor(Math.random() * 24);
+            const patrolCol = 12 + Math.floor(Math.random() * 5);
+            const path = _cachedPath(G, Math.floor(u.col), Math.floor(u.row), patrolCol, patrolRow);
+            if (path) u.path = path;
+          }
+          // Transition to assault when timer runs out or wave is active
+          if (u.aiStateTimer <= 0) {
+            u.aiState = STATE.ASSAULT;
+          }
+          break;
+        }
+
+        case STATE.ASSAULT: {
+          // Retreat override handled above
+          if (u.retreating) break;
+          // Troop trucks: deploy when deep in neutral/player territory
+          if (def.troopDeploy && u.col >= 20) {
+            for (let i = 0; i < 3; i++) {
+              const sc = Math.max(0, Math.min(COLS - 1, Math.floor(u.col) + (i - 1)));
+              const sr = Math.max(0, Math.min(ROWS - 1, Math.floor(u.row)));
+              const newU = createUnit('veil_soldier', sc, sr, 'enemy');
+              newU.aiState = STATE.ASSAULT;
+              newU.aiStateTimer = 0;
+              G.units.push(newU);
+            }
+            u.dead = true;
+            break;
+          }
+          // Only assign new target when idle
+          if (u.path.length === 0 && !u.attackTarget) {
+            _assignTargetSmart(u, G, def, 14);
+          }
+          break;
+        }
+
+        case STATE.RETREAT: {
+          u.retreating = true;
+          if (u.path.length === 0) {
+            const path = _cachedPath(G, Math.floor(u.col), Math.floor(u.row), 5, Math.floor(u.row));
+            if (path) u.path = path;
+            u.attackTarget = null;
+          }
+          break;
+        }
+
+        case STATE.GUARD: {
+          // Guard: stay near enemy base cols 5-10, attack anything that enters
+          if (u.aiStateTimer <= 0) {
+            // Switch to assault after guard duty
+            u.aiState = STATE.ASSAULT;
+            break;
+          }
+          if (u.path.length === 0 && !u.attackTarget) {
+            // Patrol within guard zone
+            const gc = 5 + Math.floor(Math.random() * 6);
+            const gr = 3 + Math.floor(Math.random() * 24);
+            const path = _cachedPath(G, Math.floor(u.col), Math.floor(u.row), gc, gr);
+            if (path) u.path = path;
+          }
+          break;
+        }
+      }
+    }
+  }
+
+  function _doRepair(u, G, dt) {
+    const damaged = G.buildings.filter(b => b.faction === 'enemy' && !b.dead && b.hp < b.maxHp);
+    if (!damaged.length) return;
+    const target = _nearestBuilding(u, damaged);
+    if (!target) return;
+    const dist = Math.hypot(target.col - u.col, target.row - u.row);
+    if (dist <= 2) {
+      target.hp = Math.min(target.hp + 15 * dt, target.maxHp);
+    } else if (u.path.length === 0) {
+      const path = _cachedPath(G, Math.floor(u.col), Math.floor(u.row),
+        Math.floor(target.col + target.w / 2), Math.floor(target.row + target.h / 2));
+      if (path) u.path = path;
     }
   }
 
@@ -162,9 +288,9 @@ const AI = (() => {
   function _launchWave(G) {
     const readyUnits = G.units.filter(u =>
       u.faction === 'enemy' && !u.dead && u.path.length === 0 && !u.attackTarget &&
-      !u.retreating && u.col < 16 // only units still in enemy territory
+      u.aiState !== STATE.RETREAT && u.col < 16
     );
-    if (readyUnits.length < 3) return; // not enough units to form a wave
+    if (readyUnits.length < 3) return;
 
     // Detect player concentration at bridge area (center corridor)
     const bridgeCount = G.units.filter(u =>
@@ -180,86 +306,25 @@ const AI = (() => {
       !u.dead && u.faction === 'player' && u.col >= 16 && u.col <= 27 && u.row > 18
     ).length;
 
-    // Decide wave composition and routing
+    // Decide wave routing
     for (let i = 0; i < readyUnits.length; i++) {
       const u = readyUnits[i];
       const def = UNIT_DEF[u.type];
+      u.aiState = STATE.ASSAULT;
+      u.aiStateTimer = 0;
+      u.retreating = false;
 
-      // Flank routing: if player is heavily concentrated at bridge, split 40% to flanks
       let targetRow = 14; // default: center bridge corridor
       if (bridgeCount >= 4) {
-        const flankRoll = i % 5; // every 5th unit goes to a flank
+        const flankRoll = i % 5;
         if (flankRoll === 1 || flankRoll === 2) {
-          // North flank (only if not already covered)
           targetRow = northCoverage < 2 ? 4 : 14;
         } else if (flankRoll === 3) {
-          // South flank
           targetRow = southCoverage < 2 ? 24 : 14;
         }
       }
 
       _assignTargetSmart(u, G, def, targetRow);
-    }
-  }
-
-  function _moveUnits(G, dt) {
-    const enemyUnits = G.units.filter(u => u.faction === 'enemy' && !u.dead);
-
-    for (const u of enemyUnits) {
-      const def = UNIT_DEF[u.type];
-
-      // Retreat logic: units at <25% HP retreat toward base (unless very close to it)
-      if (u.hp / u.maxHp < 0.25 && u.col > 8) {
-        u.retreating = true;
-      }
-      // Recover from retreat once HP > 50%
-      if (u.retreating && u.hp / u.maxHp >= 0.5) {
-        u.retreating = false;
-      }
-
-      if (u.retreating) {
-        if (u.path.length === 0) {
-          const retreatPath = _cachedPath(G, Math.floor(u.col), Math.floor(u.row), 5, Math.floor(u.row));
-          if (retreatPath) u.path = retreatPath;
-          u.attackTarget = null;
-        }
-        continue;
-      }
-
-      // Only reassign idle units
-      if (u.path.length > 0 || u.attackTarget) continue;
-
-      // Veil engineers: find damaged enemy buildings
-      if (def.repairEnemy) {
-        const damaged = G.buildings.filter(b => b.faction === 'enemy' && !b.dead && b.hp < b.maxHp);
-        if (damaged.length) {
-          const target = _nearestBuilding(u, damaged);
-          if (target) {
-            const dist = Math.hypot(target.col - u.col, target.row - u.row);
-            if (dist <= 2) {
-              target.hp = Math.min(target.hp + 15 * dt, target.maxHp);
-            } else {
-              const path = _cachedPath(G, Math.floor(u.col), Math.floor(u.row),
-                Math.floor(target.col + target.w / 2), Math.floor(target.row + target.h / 2));
-              if (path) u.path = path;
-            }
-          }
-        }
-        continue;
-      }
-
-      // Troop trucks: deploy when deep in neutral/player territory
-      if (def.troopDeploy && u.col >= 20) {
-        for (let i = 0; i < 3; i++) {
-          const sc = Math.max(0, Math.min(COLS - 1, Math.floor(u.col) + (i - 1)));
-          const sr = Math.max(0, Math.min(ROWS - 1, Math.floor(u.row)));
-          G.units.push(createUnit('veil_soldier', sc, sr, 'enemy'));
-        }
-        u.dead = true;
-        continue;
-      }
-
-      _assignTargetSmart(u, G, def, 14);
     }
   }
 

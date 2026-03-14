@@ -57,7 +57,7 @@ const BUILDING_DEF = {
   motor_pool: {
     label: 'Motor Pool', faction: 'player',
     hp: 280, cost: 300, buildTime: 25, size: [2,2], sight: 0,
-    color: '#7a6a22', trainable: ['apc','artillery'], maxCount: 1,
+    color: '#7a6a22', trainable: ['apc','artillery','harvester'], maxCount: 1,
   },
   defense_works: {
     label: 'Defense Works', faction: 'player',
@@ -181,6 +181,12 @@ const BUILDING_DEF = {
     hp: 300, cost: 0, buildTime: 0, size: [2,2], sight: 0,
     color: '#88cc88', trainable: [],
   },
+  intel_cache: {
+    label: 'Intel Cache', faction: 'neutral',
+    hp: 60, cost: 0, buildTime: 0, size: [1,1], sight: 0,
+    color: '#4488cc', trainable: [], icCapacity: 300, icRemaining: 300,
+    isResource: true,
+  },
 };
 
 // ---- Unit definitions ----
@@ -258,6 +264,12 @@ const UNIT_DEF = {
     maxActive: 3, color: '#cc5566', attackRange: 4, splash: false,
     canAttackBuildings: false, antiAirOnly: true,
   },
+  harvester: {
+    label: 'Harvester', faction: 'player',
+    hp: 160, damage: 0, speed: 1.2, sight: 3, cost: 220, buildTime: 20,
+    maxActive: 2, color: '#ddaa22', attackRange: 0, splash: false,
+    canAttackBuildings: false, isHarvester: true,
+  },
   // --- Enemy (Veil) — Soviet red palette ---
   veil_soldier: {
     label: 'Veil Soldier', faction: 'enemy',
@@ -334,11 +346,12 @@ const UNIT_DEF = {
 };
 
 // ---- Intelligence Upgrade definitions ----
+// tx/ty: grid position in tech tree (col, row), 0-indexed
 const UPGRADE_DEF = [
   {
     id: 'scout_speed_1', label: 'Scout Speed I', cost: 150,
     desc: 'Scout Vehicles +40% speed',
-    prereq: null, // quarry already checked globally
+    prereq: null, tx: 0, ty: 0,
     apply(state) {
       state.upgrades.scout_speed_1 = true;
       state.units.filter(u => u.type === 'scout_vehicle' && u.faction === 'player')
@@ -348,7 +361,7 @@ const UPGRADE_DEF = [
   {
     id: 'extended_reveal_1', label: 'Extended Reveal I', cost: 200,
     desc: 'Scout Vehicle sight: 8 → 10',
-    prereq: null,
+    prereq: null, tx: 0, ty: 1,
     apply(state) {
       state.upgrades.extended_reveal_1 = true;
       state.units.filter(u => u.type === 'scout_vehicle' && u.faction === 'player')
@@ -358,7 +371,7 @@ const UPGRADE_DEF = [
   {
     id: 'drone_resilience', label: 'Drone Resilience', cost: 250,
     desc: 'Drone HP: 40 → 90',
-    prereq: null,
+    prereq: null, tx: 0, ty: 2,
     apply(state) {
       state.upgrades.drone_resilience = true;
       state.units.filter(u => u.type === 'drone' && u.faction === 'player')
@@ -368,13 +381,13 @@ const UPGRADE_DEF = [
   {
     id: 'deep_intel', label: 'Deep Intel', cost: 300,
     desc: 'Enemy building discovery: 50 → 100 IC',
-    prereq: 'scout_speed_1',
+    prereq: 'scout_speed_1', tx: 1, ty: 0,
     apply(state) { state.upgrades.deep_intel = true; },
   },
   {
     id: 'overwatch', label: 'Overwatch', cost: 300,
     desc: 'Watchtower sight: 8 → 12 tiles',
-    prereq: null, prereqBuilding: 'watchtower', prereqBuildingCount: 2,
+    prereq: null, prereqBuilding: 'watchtower', prereqBuildingCount: 2, tx: 1, ty: 1,
     apply(state) {
       state.upgrades.overwatch = true;
       state.buildings.filter(b => b.type === 'watchtower' && b.faction === 'player')
@@ -384,8 +397,44 @@ const UPGRADE_DEF = [
   {
     id: 'emergency_airstrike', label: 'Emergency Airstrike', cost: 400,
     desc: 'One-time: reveals + deals 200 dmg to one sector',
-    prereq: 'deep_intel',
+    prereq: 'deep_intel', tx: 2, ty: 0,
     apply(state) { state.upgrades.emergency_airstrike = true; state.airstrikeAvailable = true; },
+  },
+  {
+    id: 'field_comms', label: 'Field Comms', cost: 250,
+    desc: 'Unit sight radius +1 globally',
+    prereq: 'extended_reveal_1', tx: 1, ty: 2,
+    apply(state) {
+      state.upgrades.field_comms = true;
+      state.units.filter(u => u.faction === 'player').forEach(u => u.sight += 1);
+    },
+  },
+  {
+    id: 'armor_plating', label: 'Armor Plating', cost: 350,
+    desc: 'Tanks and APCs +30% max HP',
+    prereq: null, tx: 0, ty: 3,
+    prereqBuilding: 'motor_pool',
+    apply(state) {
+      state.upgrades.armor_plating = true;
+      state.units.filter(u => (u.type === 'tank' || u.type === 'apc') && u.faction === 'player')
+        .forEach(u => { u.maxHp = Math.round(u.maxHp * 1.3); u.hp = Math.min(u.hp + 50, u.maxHp); });
+    },
+  },
+  {
+    id: 'rapid_training', label: 'Rapid Training', cost: 300,
+    desc: 'All unit train time -20%',
+    prereq: 'armor_plating', tx: 1, ty: 3,
+    apply(state) { state.upgrades.rapid_training = true; },
+  },
+  {
+    id: 'ghost_protocol', label: 'Ghost Protocol', cost: 450,
+    desc: 'Spec Ops: ignore enemy sight, +25% damage',
+    prereq: 'field_comms', tx: 2, ty: 2,
+    apply(state) {
+      state.upgrades.ghost_protocol = true;
+      state.units.filter(u => u.type === 'spec_ops' && u.faction === 'player')
+        .forEach(u => { u.damage = Math.round(u.damage * 1.25); });
+    },
   },
 ];
 
