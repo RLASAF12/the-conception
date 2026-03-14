@@ -5,22 +5,24 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>The Conception</title>
   <style>
+    /* ── Red Alert Military UI ── */
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
-      background: #0a0a0a;
+      background: #080c08;
       display: flex;
       flex-direction: column;
       align-items: center;
       justify-content: center;
       min-height: 100vh;
       font-family: 'Courier New', monospace;
-      color: #ccc;
+      color: #aaccaa;
       overflow: hidden;
     }
     #game-container {
       position: relative;
       width: 1280px;
       height: 960px;
+      box-shadow: 0 0 40px rgba(0,0,0,0.9);
     }
     #game-canvas {
       display: block;
@@ -32,20 +34,22 @@
       width: 100%; height: 100%;
       pointer-events: none;
     }
-    /* Resource bar */
+    /* ── Resource bar — military top strip ── */
     #resource-bar {
       position: absolute;
       top: 8px; left: 50%;
       transform: translateX(-50%);
-      background: rgba(0,0,0,0.75);
-      border: 1px solid #444;
-      padding: 6px 18px;
+      background: rgba(0,6,0,0.88);
+      border: 1px solid #2a5a1a;
+      border-bottom: 2px solid #3a7a22;
+      padding: 5px 20px;
       font-size: 14px;
-      letter-spacing: 1px;
-      color: #e8d87a;
+      letter-spacing: 2px;
+      color: #ccee44;
       pointer-events: none;
+      text-shadow: 0 0 8px rgba(180,220,40,0.5);
     }
-    /* Commander voice */
+    /* ── Commander comms log ── */
     #voice-log {
       position: absolute;
       top: 40px; right: 12px;
@@ -53,12 +57,14 @@
       pointer-events: none;
     }
     .voice-line {
-      background: rgba(0,0,0,0.8);
-      border-left: 3px solid #e8d87a;
-      padding: 6px 10px;
-      margin-bottom: 4px;
-      font-size: 12px;
-      color: #ddd;
+      background: rgba(0,8,0,0.88);
+      border-left: 3px solid #44aa22;
+      border-top: 1px solid #2a5a12;
+      padding: 5px 10px;
+      margin-bottom: 3px;
+      font-size: 11px;
+      color: #88cc66;
+      text-shadow: 0 0 6px rgba(80,180,40,0.4);
       animation: fadeVoice 5s forwards;
     }
     @keyframes fadeVoice {
@@ -66,13 +72,14 @@
       70%  { opacity: 1; }
       100% { opacity: 0; }
     }
-    /* Bottom HUD */
+    /* ── Bottom HUD — armored panel ── */
     #bottom-hud {
       position: absolute;
       bottom: 0; left: 0; right: 0;
       height: 120px;
-      background: rgba(0,0,0,0.85);
-      border-top: 1px solid #333;
+      background: linear-gradient(180deg, rgba(0,8,0,0.92) 0%, rgba(0,4,0,0.97) 100%);
+      border-top: 2px solid #2a5a1a;
+      box-shadow: 0 -3px 18px rgba(0,0,0,0.7);
       display: flex;
       align-items: center;
       padding: 0 12px;
@@ -81,45 +88,56 @@
     }
     #selection-info {
       flex: 1;
-      padding: 8px;
-      border: 1px solid #333;
+      padding: 8px 10px;
+      border: 1px solid #1a3a12;
+      border-left: 3px solid #2a6a18;
       height: 100px;
       overflow: hidden;
+      background: rgba(0,6,0,0.6);
     }
-    #selection-info h3 { font-size: 13px; color: #e8d87a; margin-bottom: 4px; }
-    #selection-info p  { font-size: 11px; color: #aaa; }
+    #selection-info h3 { font-size: 13px; color: #88ee44; margin-bottom: 4px; letter-spacing: 1px; }
+    #selection-info p  { font-size: 11px; color: #6a9a5a; }
     #build-panel {
       display: flex;
       flex-direction: column;
-      gap: 4px;
+      gap: 3px;
       height: 100px;
       overflow-y: auto;
     }
     .build-btn {
-      background: rgba(30,30,30,0.9);
-      border: 1px solid #555;
-      color: #ccc;
+      background: rgba(0,12,0,0.92);
+      border: 1px solid #2a5a18;
+      color: #88aa66;
       padding: 4px 10px;
       font-size: 11px;
       font-family: 'Courier New', monospace;
       cursor: pointer;
       white-space: nowrap;
       pointer-events: all;
+      letter-spacing: 0.5px;
+      transition: all 0.1s;
     }
-    .build-btn:hover { background: rgba(60,60,40,0.9); border-color: #e8d87a; color: #e8d87a; }
-    .build-btn:disabled { opacity: 0.4; cursor: default; }
+    .build-btn:hover {
+      background: rgba(20,50,10,0.95);
+      border-color: #44ff22;
+      color: #88ff44;
+      text-shadow: 0 0 6px rgba(80,200,40,0.6);
+    }
+    .build-btn:disabled { opacity: 0.3; cursor: default; }
     #minimap-container {
       position: absolute;
       bottom: 128px; right: 8px;
-      border: 1px solid #444;
+      border: 1px solid #2a4a18;
+      border-top: 2px solid #3a6a22;
+      background: #000;
       pointer-events: none;
     }
     #minimap { display: block; }
-    /* Overlays */
+    /* ── Overlays ── */
     #overlay {
       position: absolute;
       top: 0; left: 0; width: 100%; height: 100%;
-      background: rgba(0,0,0,0.88);
+      background: rgba(0,4,0,0.92);
       display: flex;
       flex-direction: column;
       align-items: center;
@@ -128,96 +146,109 @@
       pointer-events: all;
       z-index: 100;
     }
-    #overlay h1 { font-size: 42px; letter-spacing: 6px; color: #e8d87a; }
-    #overlay h2 { font-size: 22px; color: #aaa; letter-spacing: 2px; }
-    #overlay p  { font-size: 13px; color: #777; max-width: 500px; text-align: center; line-height: 1.7; }
+    #overlay h1 {
+      font-size: 42px;
+      letter-spacing: 8px;
+      color: #88ee44;
+      text-shadow: 0 0 20px rgba(100,220,40,0.5), 0 0 40px rgba(60,160,20,0.3);
+    }
+    #overlay h2 { font-size: 22px; color: #5a8a44; letter-spacing: 3px; }
+    #overlay p  { font-size: 13px; color: #4a6a38; max-width: 520px; text-align: center; line-height: 1.8; }
     .overlay-btn {
       background: transparent;
-      border: 1px solid #666;
-      color: #ccc;
-      padding: 10px 30px;
+      border: 1px solid #2a5a18;
+      color: #6a9a44;
+      padding: 10px 32px;
       font-size: 14px;
       font-family: 'Courier New', monospace;
-      letter-spacing: 2px;
+      letter-spacing: 3px;
       cursor: pointer;
       pointer-events: all;
+      transition: all 0.15s;
     }
-    .overlay-btn:hover { border-color: #e8d87a; color: #e8d87a; }
-    #stats { font-size: 12px; color: #888; text-align: center; line-height: 1.8; }
-    /* Placement ghost */
+    .overlay-btn:hover {
+      border-color: #44ff22;
+      color: #88ff44;
+      text-shadow: 0 0 8px rgba(80,200,40,0.6);
+      background: rgba(20,50,10,0.5);
+    }
+    #stats { font-size: 12px; color: #4a6a38; text-align: center; line-height: 1.9; }
+    /* ── Placement ghost ── */
     #placement-cursor {
       position: absolute;
       pointer-events: none;
-      border: 2px dashed rgba(100,200,100,0.7);
-      background: rgba(100,200,100,0.12);
+      border: 2px dashed rgba(68,255,40,0.75);
+      background: rgba(40,180,20,0.1);
       display: none;
     }
-    /* Alert flash */
+    /* ── Alert flash ── */
     #alert-flash {
       position: absolute;
       top: 0; left: 0; width: 100%; height: 100%;
       pointer-events: none;
-      border: 4px solid transparent;
+      border: 5px solid transparent;
     }
     .alert-flash-active {
       animation: alertPulse 0.5s ease-in-out 3;
     }
     @keyframes alertPulse {
       0%   { border-color: transparent; }
-      50%  { border-color: rgba(255,50,50,0.7); }
+      50%  { border-color: rgba(255,40,40,0.75); box-shadow: inset 0 0 30px rgba(220,0,0,0.3); }
       100% { border-color: transparent; }
     }
-    /* Upgrade panel */
+    /* ── Upgrade panel ── */
     #upgrade-panel {
       position: absolute;
       top: 50%; left: 50%;
       transform: translate(-50%, -50%);
-      background: rgba(5,5,5,0.96);
-      border: 1px solid #555;
+      background: rgba(0,6,0,0.97);
+      border: 1px solid #2a5a18;
+      border-top: 2px solid #44aa22;
       padding: 18px;
       width: 420px;
       display: none;
       z-index: 50;
       pointer-events: all;
     }
-    #upgrade-panel h3 { font-size: 14px; color: #e8d87a; margin-bottom: 12px; letter-spacing: 2px; }
+    #upgrade-panel h3 { font-size: 14px; color: #88ee44; margin-bottom: 12px; letter-spacing: 2px; }
     .upgrade-item {
       display: flex;
       justify-content: space-between;
       align-items: center;
       padding: 6px 0;
-      border-bottom: 1px solid #222;
+      border-bottom: 1px solid #1a3a10;
     }
-    .upgrade-item span { font-size: 11px; color: #aaa; }
-    .upgrade-item .cost { color: #e8d87a; font-size: 11px; }
+    .upgrade-item span { font-size: 11px; color: #6a9a5a; }
+    .upgrade-item .cost { color: #ccee44; font-size: 11px; }
     .upgrade-item button {
       background: transparent;
-      border: 1px solid #555;
-      color: #ccc;
+      border: 1px solid #2a5a18;
+      color: #88aa66;
       padding: 2px 8px;
       font-size: 10px;
       font-family: 'Courier New', monospace;
       cursor: pointer;
     }
-    .upgrade-item button:hover { border-color: #e8d87a; color: #e8d87a; }
+    .upgrade-item button:hover { border-color: #44ff22; color: #88ff44; }
     .upgrade-item button:disabled { opacity: 0.3; cursor: default; }
     #close-upgrade {
       margin-top: 10px;
       background: transparent;
-      border: 1px solid #444;
-      color: #777;
+      border: 1px solid #1a3a10;
+      color: #4a6a38;
       padding: 4px 14px;
       font-size: 11px;
       font-family: 'Courier New', monospace;
       cursor: pointer;
     }
-    #close-upgrade:hover { border-color: #777; color: #aaa; }
+    #close-upgrade:hover { border-color: #3a6a28; color: #6a9a44; }
     #timer-display {
       position: absolute;
       top: 8px; left: 12px;
       font-size: 13px;
-      color: #888;
+      color: #4a7a38;
       pointer-events: none;
+      letter-spacing: 1px;
     }
     #settlement-hps {
       position: absolute;
@@ -226,7 +257,7 @@
     }
     .settlement-hp-label {
       font-size: 11px;
-      color: #aaa;
+      color: #6a8a5a;
       margin-bottom: 2px;
     }
   </style>
