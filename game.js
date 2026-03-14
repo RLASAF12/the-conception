@@ -853,6 +853,28 @@ class Renderer {
         stroke('rgba(100,180,255,0.8)', 1.5, x+2,y+2,pw-4,ph-4);
         break;
       }
+      /* ── POWER PLANT ── */
+      case 'power_plant': {
+        fill(mc, x+2,y+2,pw-4,ph-4);
+        fill(lt, x+2,y+2,pw-4,5);
+        fill(dk, x+2,y+ph-8,pw-4,6);
+        // energy pipes on sides
+        fill('#2a2800', x+4,y+6,3,ph-10);
+        fill('#2a2800', x+pw-7,y+6,3,ph-10);
+        fill('#eecc00', x+4,y+ph/2-2,3,4);
+        fill('#eecc00', x+pw-7,y+ph/2-2,3,4);
+        // lightning bolt
+        const lbx = x+pw/2, lby = y+ph/2;
+        ctx.strokeStyle = '#ffee00'; ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        ctx.moveTo(lbx+3,lby-9); ctx.lineTo(lbx-3,lby); ctx.lineTo(lbx+2,lby);
+        ctx.lineTo(lbx-3,lby+9); ctx.stroke();
+        // animated glow
+        const gw = 0.3 + 0.2 * Math.sin(this._frame * 0.08);
+        ctx.fillStyle = `rgba(255,230,0,${gw})`;
+        ctx.beginPath(); ctx.arc(lbx,lby,5,0,Math.PI*2); ctx.fill();
+        outline(); break;
+      }
       /* ── DEFAULT fallback ── */
       default: {
         fill(mc, x+2,y+2,pw-4,ph-4);
@@ -910,6 +932,26 @@ class Renderer {
         ctx.fillText(`[${u.loadedUnits.length}]`, x, y - 16);
         ctx.restore();
       }
+
+      // Patrol badge — small green cycling arrow
+      if (u.patrolPoints && u.faction === 'player') {
+        ctx.save();
+        ctx.font = 'bold 9px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillStyle = 'rgba(0,255,100,0.9)';
+        ctx.fillText('↺', x, y - (u.stars > 0 ? 26 : 16));
+        ctx.restore();
+      }
+
+      // Follow badge — small blue arrow
+      if (u.followTarget && u.faction === 'player') {
+        ctx.save();
+        ctx.font = 'bold 9px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillStyle = 'rgba(100,180,255,0.9)';
+        ctx.fillText('⇝', x, y - (u.stars > 0 ? 26 : 16));
+        ctx.restore();
+      }
     }
   }
 
@@ -937,6 +979,10 @@ class Renderer {
         ctx.strokeStyle = dk; ctx.lineWidth = 1.5;
         ctx.beginPath(); ctx.moveTo(2,0); ctx.lineTo(10,-1); ctx.stroke();
         ctx.strokeStyle = outlineC; ctx.lineWidth = 0.6; ctx.strokeRect(-3,-2,6,7);
+        // legs
+        ctx.strokeStyle = dk; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.moveTo(-1,5); ctx.lineTo(-2,10); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(2,5); ctx.lineTo(3,10); ctx.stroke();
         break;
       }
       case 'veil_heavy': {
@@ -949,6 +995,10 @@ class Renderer {
         ctx.beginPath(); ctx.arc(0,-6,5,0,Math.PI*2); ctx.fill();
         ctx.strokeStyle = '#222'; ctx.lineWidth = 2.5;
         ctx.beginPath(); ctx.moveTo(3,-1); ctx.lineTo(13,-2); ctx.stroke();
+        // legs (heavy unit, wider stance)
+        ctx.strokeStyle = dk; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(-2,6); ctx.lineTo(-3,11); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(3,6); ctx.lineTo(4,11); ctx.stroke();
         break;
       }
       case 'engineer': case 'veil_engineer': {
@@ -963,6 +1013,10 @@ class Renderer {
         ctx.beginPath(); ctx.moveTo(2,1); ctx.lineTo(8,-3); ctx.stroke();
         ctx.fillStyle = '#888';
         ctx.beginPath(); ctx.arc(8,-3,2.5,0,Math.PI*2); ctx.fill();
+        // legs
+        ctx.strokeStyle = dk; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.moveTo(-1,5); ctx.lineTo(-2,10); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(2,5); ctx.lineTo(3,10); ctx.stroke();
         break;
       }
       case 'medic': {
@@ -976,6 +1030,10 @@ class Renderer {
         ctx.beginPath(); ctx.arc(0,-6,3,-Math.PI,0); ctx.fill();
         ctx.fillStyle = '#fff'; ctx.fillRect(-6,0,4,4);
         ctx.fillStyle = '#dd2222'; ctx.fillRect(-5,1,2,2); ctx.fillRect(-6,1.5,4,1);
+        // legs
+        ctx.strokeStyle = '#aaaaaa'; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.moveTo(-1,5); ctx.lineTo(-2,10); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(2,5); ctx.lineTo(3,10); ctx.stroke();
         break;
       }
       case 'sniper': case 'veil_sniper': {
@@ -1000,6 +1058,10 @@ class Renderer {
         ctx.strokeStyle = '#333344'; ctx.lineWidth = 2;
         ctx.beginPath(); ctx.moveTo(2,0); ctx.lineTo(10,-0.5); ctx.stroke();
         ctx.fillStyle = '#333344'; ctx.fillRect(4,-1,4,2);
+        // legs
+        ctx.strokeStyle = '#1a1a2a'; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.moveTo(-1,5); ctx.lineTo(-2,10); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(2,5); ctx.lineTo(3,10); ctx.stroke();
         break;
       }
       case 'infiltrator': {
@@ -1012,6 +1074,10 @@ class Renderer {
         ctx.fillStyle = '#ff4488'; ctx.fillRect(-2,-6,4,1);
         ctx.strokeStyle = '#440044'; ctx.lineWidth = 1.5;
         ctx.beginPath(); ctx.moveTo(2,0); ctx.lineTo(10,-1); ctx.stroke();
+        // legs
+        ctx.strokeStyle = '#2a1a3a'; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.moveTo(-1,5); ctx.lineTo(-2,10); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(2,5); ctx.lineTo(3,10); ctx.stroke();
         break;
       }
       case 'veil_scout': {
@@ -1022,6 +1088,10 @@ class Renderer {
         ctx.beginPath(); ctx.arc(0,-3,3,0,Math.PI*2); ctx.fill();
         ctx.strokeStyle = '#551111'; ctx.lineWidth = 1;
         ctx.beginPath(); ctx.moveTo(2,0); ctx.lineTo(8,0); ctx.stroke();
+        // legs
+        ctx.strokeStyle = dk; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.moveTo(-1,4); ctx.lineTo(-2,9); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(2,4); ctx.lineTo(3,9); ctx.stroke();
         break;
       }
       /* ─ SCOUT VEHICLE ─ */
@@ -1127,8 +1197,30 @@ class Renderer {
         ctx.strokeStyle = outlineC; ctx.lineWidth = 1; ctx.strokeRect(-6,-5,12,10);
         break;
       }
-      /* ─ HELICOPTER / BOMBER ─ */
-      case 'helicopter': case 'veil_bomber': {
+      /* ─ VEIL BOMBER ─ suicide ground unit, red explosive vest */
+      case 'veil_bomber': {
+        ctx.fillStyle = shadow;
+        ctx.beginPath(); ctx.ellipse(1,3,5,3,0,0,Math.PI*2); ctx.fill();
+        ctx.fillStyle = '#1a0505'; ctx.fillRect(-3,-2,6,7);   // dark cloak
+        ctx.fillStyle = '#cc1111'; ctx.fillRect(-3,0,6,3);    // red vest band
+        ctx.fillStyle = '#ffaa00';
+        ctx.beginPath(); ctx.arc(-1,0,1.5,0,Math.PI*2); ctx.fill(); // detonator
+        ctx.beginPath(); ctx.arc(2,0,1.5,0,Math.PI*2); ctx.fill();
+        ctx.fillStyle = '#1a0505';
+        ctx.beginPath(); ctx.arc(0,-5,3.5,0,Math.PI*2); ctx.fill(); // dark head
+        ctx.fillStyle = '#cc3311'; ctx.fillRect(-2,-6,4,1);   // red eyes
+        if (this._frame % 4 < 2) { // fuse flicker
+          ctx.fillStyle = '#ffff00';
+          ctx.beginPath(); ctx.arc(3,-1,1.5,0,Math.PI*2); ctx.fill();
+        }
+        // legs
+        ctx.strokeStyle = '#1a0505'; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.moveTo(-1,5); ctx.lineTo(-2,10); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(2,5); ctx.lineTo(3,10); ctx.stroke();
+        break;
+      }
+      /* ─ HELICOPTER ─ */
+      case 'helicopter': {
         ctx.fillStyle = 'rgba(0,0,0,0.18)';
         ctx.beginPath(); ctx.ellipse(0,13,12,5,0,0,Math.PI*2); ctx.fill();
         ctx.fillStyle = dk;
@@ -1169,9 +1261,14 @@ class Renderer {
         ctx.moveTo(-8,-8); ctx.lineTo(8,8);
         ctx.moveTo(8,-8); ctx.lineTo(-8,8);
         ctx.stroke();
-        for (const [tx,ty] of [[-9,-9],[9,9],[9,-9],[-9,9]]) {
+        // Spinning propellers at arm tips
+        const pa = (this._frame * 0.35) % (Math.PI * 2);
+        for (const [ptx,pty] of [[-9,-9],[9,9],[9,-9],[-9,9]]) {
           ctx.fillStyle = '#1a1a1a';
-          ctx.beginPath(); ctx.arc(tx,ty,3,0,Math.PI*2); ctx.fill();
+          ctx.beginPath(); ctx.arc(ptx,pty,2,0,Math.PI*2); ctx.fill();
+          ctx.strokeStyle = '#2a2a2a'; ctx.lineWidth = 2;
+          ctx.beginPath(); ctx.arc(ptx,pty,4,pa,pa+Math.PI*0.7); ctx.stroke();
+          ctx.beginPath(); ctx.arc(ptx,pty,4,pa+Math.PI,pa+Math.PI*1.7); ctx.stroke();
         }
         ctx.fillStyle = dk;
         ctx.beginPath(); ctx.arc(0,0,4,0,Math.PI*2); ctx.fill();
