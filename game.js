@@ -457,9 +457,10 @@ class Renderer {
           ctx.stroke();
         }
 
-        // Very subtle grid
-        ctx.strokeStyle = 'rgba(0,0,0,0.055)';
-        ctx.lineWidth = 0.5;
+        // Tile grid
+        const isSectorEdge = (r % 4 === 0 || c % 4 === 0);
+        ctx.strokeStyle = isSectorEdge ? 'rgba(0,0,0,0.14)' : 'rgba(0,0,0,0.07)';
+        ctx.lineWidth = isSectorEdge ? 0.8 : 0.4;
         ctx.strokeRect(x, y, TILE, TILE);
       }
     }
@@ -476,9 +477,40 @@ class Renderer {
       const x = b.col * TILE, y = b.row * TILE;
       const pw = b.w * TILE, ph = b.h * TILE;
 
+      // Drop shadow
+      ctx.globalAlpha = 0.35;
+      ctx.fillStyle = '#000';
+      ctx.fillRect(x + 4, y + 4, pw, ph);
       ctx.globalAlpha = b.buildProgress < 1 ? 0.35 + b.buildProgress * 0.65 : 1;
       this._drawBuildingShape(ctx, b.type, b.faction, x, y, pw, ph);
       ctx.globalAlpha = 1;
+
+      // Status badges (player buildings only)
+      if (b.faction === 'player' && b.buildProgress >= 1) {
+        const badgeX = x + pw - 9, badgeY = y + 2;
+        // Underpowered indicator
+        if (this.G && this.G.powerLevel < 0) {
+          ctx.save();
+          ctx.font = 'bold 10px monospace';
+          ctx.textAlign = 'center';
+          ctx.fillStyle = '#ffcc00';
+          ctx.shadowColor = '#ffcc00'; ctx.shadowBlur = 5;
+          ctx.fillText('⚡', badgeX, badgeY + 10);
+          ctx.shadowBlur = 0;
+          ctx.restore();
+        }
+        // Training indicator
+        if (b.trainQueue && b.trainQueue.length > 0) {
+          ctx.save();
+          ctx.font = '9px monospace';
+          ctx.textAlign = 'center';
+          ctx.fillStyle = '#44aaff';
+          ctx.shadowColor = '#44aaff'; ctx.shadowBlur = 4;
+          ctx.fillText('⚙', x + 8, badgeY + 10);
+          ctx.shadowBlur = 0;
+          ctx.restore();
+        }
+      }
 
       // Build progress bar
       if (b.buildProgress < 1) {
@@ -546,6 +578,11 @@ class Renderer {
     switch (type) {
       /* ── COMMAND BASE ── */
       case 'command_base': {
+        // Pulsing HQ ring behind building
+        const hqPulse = 0.18 + 0.12 * Math.abs(Math.sin(this._frame * 0.04));
+        ctx.strokeStyle = `rgba(80,160,255,${hqPulse})`;
+        ctx.lineWidth = 5;
+        ctx.beginPath(); ctx.arc(x+pw/2, y+ph/2, pw*0.65, 0, Math.PI*2); ctx.stroke();
         fill(mc, x+3,y+3,pw-6,ph-6);
         fill(lt, x+8,y+3,pw-16,ph/2-4);
         // windows
@@ -559,26 +596,34 @@ class Renderer {
         ctx.beginPath(); ctx.moveTo(x+pw/2,y+2); ctx.lineTo(x+pw/2,y-11); ctx.stroke();
         ctx.lineWidth = 1;
         ctx.beginPath(); ctx.moveTo(x+pw/2-7,y-8); ctx.lineTo(x+pw/2+7,y-8); ctx.stroke();
-        // satellite dish
-        ctx.strokeStyle = '#88aacc'; ctx.lineWidth = 1.5;
-        ctx.beginPath(); ctx.arc(x+pw-10,y+9,6,Math.PI*0.75,Math.PI*1.85); ctx.stroke();
-        ctx.beginPath(); ctx.moveTo(x+pw-10,y+15); ctx.lineTo(x+pw-10,y+9); ctx.stroke();
+        // satellite dish (larger)
+        ctx.strokeStyle = '#88aacc'; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(x+pw-10,y+9,9,Math.PI*0.6,Math.PI*1.9); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(x+pw-10,y+18); ctx.lineTo(x+pw-10,y+9); ctx.stroke();
         outline(); break;
       }
       /* ── BARRACKS ── */
       case 'barracks': case 'veil_barracks': {
         fill(mc, x+3,y+3,pw-6,ph-6);
-        fill(dk, x+3,y+3,pw-6,6);
-        fill(lt, x+3,y+4,pw-6,3);
-        // windows
-        ctx.fillStyle = isEnemy ? '#220000' : '#334455';
+        fill(dk, x+3,y+3,pw-6,8);
+        fill(lt, x+3,y+4,pw-6,4);
+        // windows with soldier silhouettes inside
+        const wc = isEnemy ? '#220000' : '#1a2a3a';
         for (let i=0;i<3;i++) {
-          ctx.fillRect(x+8+i*16, y+14, 8, 6);
-          ctx.fillRect(x+8+i*16, y+ph/2+6, 8, 6);
+          ctx.fillStyle = wc; ctx.fillRect(x+8+i*16, y+14, 10, 8);
+          ctx.fillStyle = wc; ctx.fillRect(x+8+i*16, y+ph/2+6, 10, 8);
+          // tiny soldier silhouette in window
+          ctx.fillStyle = isEnemy ? '#881111' : '#4488aa';
+          ctx.beginPath(); ctx.arc(x+13+i*16, y+16, 2, 0, Math.PI*2); ctx.fill();
+          ctx.fillRect(x+11+i*16, y+18, 4, 3);
         }
-        // door
-        fill('#111', x+pw/2-5,y+ph-12,10,10);
-        ctx.strokeStyle = '#555'; ctx.lineWidth = 0.8; ctx.strokeRect(x+pw/2-5,y+ph-12,10,10);
+        // door (wider, arched top)
+        fill('#111', x+pw/2-6,y+ph-13,12,11);
+        ctx.strokeStyle = '#444'; ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(x+pw/2, y+ph-13, 6, Math.PI, 0); ctx.stroke();
+        // roof color band
+        fill(lt, x+3,y+3,pw-6,4);
         outline(); break;
       }
       /* ── WATCHTOWER ── */
@@ -639,13 +684,23 @@ class Renderer {
         fill(mc, x+3,y+3,pw-6,ph-6);
         fill(dk, x+3,y+3,pw-6,8);
         fill(lt, x+4,y+4,pw-8,4);
-        fill('#1a1a1a', x+8,y+16,pw-16,ph-22); // bay door opening
-        ctx.strokeStyle = '#333'; ctx.lineWidth = 1;
-        for (let d=4;d<ph-22;d+=5) {
+        fill('#0a0a0a', x+8,y+16,pw-16,ph-22); // bay door opening
+        // garage door stripes
+        ctx.strokeStyle = '#2a2a2a'; ctx.lineWidth = 1.5;
+        for (let d=4;d<ph-22;d+=6) {
           ctx.beginPath(); ctx.moveTo(x+8,y+16+d); ctx.lineTo(x+pw-8,y+16+d); ctx.stroke();
         }
-        ctx.fillStyle = 'rgba(80,60,30,0.55)';
-        ctx.fillRect(x+14,y+24,pw-28,12);
+        // vehicle silhouette in bay
+        ctx.fillStyle = 'rgba(100,80,40,0.7)';
+        ctx.fillRect(x+12,y+22,pw-24,14); // body
+        ctx.fillRect(x+16,y+18,pw-32,8); // turret top
+        ctx.fillStyle = 'rgba(40,30,15,0.8)';
+        ctx.beginPath(); ctx.arc(x+18,y+36,5,0,Math.PI*2); ctx.fill(); // wheel L
+        ctx.beginPath(); ctx.arc(x+pw-18,y+36,5,0,Math.PI*2); ctx.fill(); // wheel R
+        // smoke from exhaust
+        const s1 = (this._frame * 0.04) % 1;
+        ctx.fillStyle = `rgba(120,120,100,${0.3*(1-s1)})`;
+        ctx.beginPath(); ctx.arc(x+pw-9, y+10 - s1*8, 2+s1*3, 0, Math.PI*2); ctx.fill();
         outline(); break;
       }
       /* ── RADAR STATION ── */
@@ -668,11 +723,19 @@ class Renderer {
       case 'hospital': case 'veil_hospital': {
         fill(mc, x+3,y+3,pw-6,ph-6);
         fill(lt, x+3,y+3,pw-6,5);
-        const cx=x+pw/2, cy=y+ph/2;
+        const hcx=x+pw/2, hcy=y+ph/2;
+        // Pulsing cross glow when healing
+        const healPulse = 0.4 + 0.3 * Math.abs(Math.sin(this._frame * 0.06));
+        ctx.fillStyle = `rgba(255,255,255,${healPulse * 0.25})`;
+        ctx.fillRect(hcx-10,hcy-4,20,8); ctx.fillRect(hcx-4,hcy-10,8,20);
+        // Main cross
         ctx.fillStyle = isEnemy ? '#990000' : '#ee2222';
-        ctx.fillRect(cx-8,cy-3,16,6); ctx.fillRect(cx-3,cy-8,6,16);
-        ctx.fillStyle = 'rgba(180,220,255,0.5)';
-        ctx.fillRect(x+5,y+10,6,5); ctx.fillRect(x+pw-11,y+10,6,5);
+        ctx.fillRect(hcx-9,hcy-3,18,6); ctx.fillRect(hcx-3,hcy-9,6,18);
+        // White border on cross
+        ctx.strokeStyle = `rgba(255,200,200,${healPulse})`; ctx.lineWidth = 1;
+        ctx.strokeRect(hcx-9,hcy-3,18,6);
+        ctx.fillStyle = 'rgba(180,220,255,0.55)';
+        ctx.fillRect(x+5,y+9,7,6); ctx.fillRect(x+pw-12,y+9,7,6);
         outline(); break;
       }
       /* ── QUARRY ── */
@@ -702,10 +765,21 @@ class Renderer {
         fill(mc, x+3,y+3,pw-6,ph-6);
         fill(dk, x+3,y+3,5,ph-6); fill(dk, x+pw-8,y+3,5,ph-6);
         fill(dk, x+3,y+3,pw-6,5); fill(dk, x+3,y+ph-8,pw-6,5);
-        ctx.strokeStyle = lt; ctx.lineWidth = 2;
+        // AA gun mount circle
+        ctx.fillStyle = dk;
+        ctx.beginPath(); ctx.arc(x+pw/2, y+ph/2-2, 9, 0, Math.PI*2); ctx.fill();
+        ctx.fillStyle = lt;
+        ctx.beginPath(); ctx.arc(x+pw/2, y+ph/2-2, 6, 0, Math.PI*2); ctx.fill();
+        // Gun barrels (two pointing up-left and up-right)
+        ctx.strokeStyle = '#222'; ctx.lineWidth = 3;
         ctx.beginPath();
-        ctx.moveTo(x+pw/2,y+ph/2); ctx.lineTo(x+pw/2-8,y+ph/2-14);
-        ctx.moveTo(x+pw/2,y+ph/2); ctx.lineTo(x+pw/2+8,y+ph/2-14);
+        ctx.moveTo(x+pw/2-2, y+ph/2-5); ctx.lineTo(x+pw/2-10, y+ph/2-18);
+        ctx.moveTo(x+pw/2+2, y+ph/2-5); ctx.lineTo(x+pw/2+10, y+ph/2-18);
+        ctx.stroke();
+        ctx.strokeStyle = '#888'; ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(x+pw/2-2, y+ph/2-5); ctx.lineTo(x+pw/2-10, y+ph/2-18);
+        ctx.moveTo(x+pw/2+2, y+ph/2-5); ctx.lineTo(x+pw/2+10, y+ph/2-18);
         ctx.stroke();
         outline(); break;
       }
@@ -858,11 +932,22 @@ class Renderer {
         fill(mc, x+2,y+2,pw-4,ph-4);
         fill(lt, x+2,y+2,pw-4,5);
         fill(dk, x+2,y+ph-8,pw-4,6);
-        // energy pipes on sides
-        fill('#2a2800', x+4,y+6,3,ph-10);
-        fill('#2a2800', x+pw-7,y+6,3,ph-10);
-        fill('#eecc00', x+4,y+ph/2-2,3,4);
-        fill('#eecc00', x+pw-7,y+ph/2-2,3,4);
+        // tall energy towers on sides
+        fill('#1a1800', x+4,y+2,5,ph-4);
+        fill('#1a1800', x+pw-9,y+2,5,ph-4);
+        fill('#eecc00', x+4,y+ph/2-3,5,6);
+        fill('#eecc00', x+pw-9,y+ph/2-3,5,6);
+        // electric arc between towers (animated)
+        const arcPhase = this._frame * 0.15;
+        ctx.strokeStyle = `rgba(255,240,100,${0.6 + 0.4*Math.abs(Math.sin(arcPhase))})`;
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([2,2]);
+        ctx.beginPath();
+        ctx.moveTo(x+9,y+ph/2);
+        const midY = y+ph/2 - 5 - 3*Math.sin(arcPhase*1.7);
+        ctx.quadraticCurveTo(x+pw/2, midY, x+pw-9, y+ph/2);
+        ctx.stroke();
+        ctx.setLineDash([]);
         // lightning bolt
         const lbx = x+pw/2, lby = y+ph/2;
         ctx.strokeStyle = '#ffee00'; ctx.lineWidth = 2.5;
@@ -870,9 +955,9 @@ class Renderer {
         ctx.moveTo(lbx+3,lby-9); ctx.lineTo(lbx-3,lby); ctx.lineTo(lbx+2,lby);
         ctx.lineTo(lbx-3,lby+9); ctx.stroke();
         // animated glow
-        const gw = 0.3 + 0.2 * Math.sin(this._frame * 0.08);
+        const gw = 0.35 + 0.25 * Math.sin(this._frame * 0.08);
         ctx.fillStyle = `rgba(255,230,0,${gw})`;
-        ctx.beginPath(); ctx.arc(lbx,lby,5,0,Math.PI*2); ctx.fill();
+        ctx.beginPath(); ctx.arc(lbx,lby,7,0,Math.PI*2); ctx.fill();
         outline(); break;
       }
       /* ── DEFAULT fallback ── */
@@ -908,6 +993,23 @@ class Renderer {
         ctx.textAlign = 'left';
       }
       ctx.globalAlpha = 1;
+
+      // Unit type badge (2-letter abbreviation, bottom-right corner of sprite)
+      if (u.faction === 'player' && !isGhost) {
+        const badge = { soldier:'SL', scout_vehicle:'SC', tank:'TK', spec_ops:'SO',
+          engineer:'EN', medic:'MD', sniper:'SN', apc:'AP', artillery:'AT',
+          harvester:'HV', anti_air:'AA', drone:'DR', helicopter:'HE' }[u.type];
+        if (badge) {
+          ctx.save();
+          ctx.font = 'bold 7px monospace';
+          ctx.textAlign = 'center';
+          ctx.fillStyle = 'rgba(0,0,0,0.55)';
+          ctx.fillRect(x + 4, y + 6, 12, 7);
+          ctx.fillStyle = '#88ddff';
+          ctx.fillText(badge, x + 10, y + 13);
+          ctx.restore();
+        }
+      }
 
       // Veterancy stars (player units only)
       if (u.faction === 'player' && u.stars > 0) {
@@ -1393,7 +1495,8 @@ class Renderer {
         : Math.floor(e.row + (e.h||1)/2) * COLS + Math.floor(e.col + (e.w||1)/2);
       if (e.faction !== 'player' && G.fog[fogIdx] !== 1) continue;
       const pct = e.hp / e.maxHp;
-      if (pct >= 1) continue;
+      // Always show HP bar for player units; only show for others when damaged
+      if (pct >= 1 && e.faction !== 'player') continue;
       const bx = isUnit ? e.col * TILE - 12 : e.col * TILE + 2;
       const by = isUnit ? e.row * TILE - 16  : e.row * TILE - 5;
       const bw = isUnit ? 24 : (e.w||1) * TILE - 4;
@@ -2664,6 +2767,13 @@ class Game {
     canvas.addEventListener('contextmenu', (e) => { e.preventDefault(); this._onRightClick(e); });
 
     document.addEventListener('keydown', (e) => this._onKey(e));
+
+    // HUD button fallbacks (work without keyboard focus)
+    const fakeKey = (key) => this._onKey({ key, preventDefault: () => {} });
+    window._hudBuild     = () => fakeKey('b');
+    window._hudAtkMove   = () => fakeKey('a');
+    window._hudHold      = () => fakeKey('h');
+    window._hudAirstrike = () => fakeKey('x');
   }
 
   _canvasPos(e) {

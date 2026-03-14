@@ -137,6 +137,45 @@
       text-shadow: 0 0 6px rgba(80,200,40,0.6);
     }
     .build-btn:disabled { opacity: 0.3; cursor: default; }
+    /* ── HUD Action Buttons ── */
+    #hud-actions {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      height: 100px;
+      justify-content: center;
+      border-left: 1px solid #1a3a10;
+      padding-left: 8px;
+    }
+    .hud-btn {
+      background: rgba(0,15,0,0.92);
+      border: 1px solid #2a6a18;
+      border-left: 3px solid #44aa22;
+      color: #88cc66;
+      padding: 5px 10px;
+      font-size: 11px;
+      font-family: 'Courier New', monospace;
+      cursor: pointer;
+      white-space: nowrap;
+      pointer-events: all;
+      letter-spacing: 0.5px;
+      transition: all 0.1s;
+      text-align: left;
+      min-width: 110px;
+    }
+    .hud-btn:hover {
+      background: rgba(20,60,10,0.95);
+      border-color: #44ff22;
+      border-left-color: #88ff44;
+      color: #ccff88;
+      text-shadow: 0 0 6px rgba(80,220,40,0.6);
+    }
+    .hud-btn:disabled { opacity: 0.3; cursor: default; }
+    .hud-btn-key {
+      color: #4a7a38;
+      font-size: 9px;
+      margin-left: 4px;
+    }
     #minimap-container {
       position: absolute;
       bottom: 128px; right: 8px;
@@ -474,6 +513,13 @@
       <p id="sel-queue"></p>
     </div>
     <div id="build-panel"></div>
+    <div id="hud-actions">
+      <button class="hud-btn" id="btn-build">&#127968; BUILD <span class="hud-btn-key">[B]</span></button>
+      <button class="hud-btn" id="btn-upgrades">&#9733; UPGRADES</button>
+      <button class="hud-btn" id="btn-atkmove">&#9876; ATK MOVE <span class="hud-btn-key">[A]</span></button>
+      <button class="hud-btn" id="btn-hold">&#9632; HOLD POS <span class="hud-btn-key">[H]</span></button>
+      <button class="hud-btn" id="btn-airstrike" id="btn-airstrike">&#9992; AIRSTRIKE <span class="hud-btn-key">[X]</span></button>
+    </div>
   </div>
 
   <div id="upgrade-panel">

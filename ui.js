@@ -58,6 +58,13 @@ const UI = (() => {
     if (_sidebarG) showUpgradePanel(_sidebarG);
   });
 
+  // HUD action buttons — mouse-clickable fallbacks for keyboard shortcuts
+  document.getElementById('btn-build')?.addEventListener('click', () => window._hudBuild?.());
+  document.getElementById('btn-upgrades')?.addEventListener('click', () => { if (_sidebarG) showUpgradePanel(_sidebarG); });
+  document.getElementById('btn-atkmove')?.addEventListener('click', () => window._hudAtkMove?.());
+  document.getElementById('btn-hold')?.addEventListener('click', () => window._hudHold?.());
+  document.getElementById('btn-airstrike')?.addEventListener('click', () => window._hudAirstrike?.());
+
   const PLAYER_BUILDINGS = [
     'barracks','quarry','watchtower','wall','fortified_wall',
     'field_ops','motor_pool','defense_works',
