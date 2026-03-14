@@ -381,6 +381,8 @@ class Renderer {
 
   drawFrame(G) {
     const ctx = this.ctx;
+    ctx.globalAlpha = 1;
+    ctx.setLineDash([]);
     ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
     this._frame++;
     this._drawTerrain(ctx, G);
@@ -1696,9 +1698,14 @@ class Renderer {
   }
 
   // ─── FOG (Isometric) ────────────────────────────────────────
+  // Uses painter's algorithm (same diagonal sweep as terrain) so fog
+  // is drawn back-to-front and correctly covers/reveals the iso scene.
   _drawFog(ctx, G) {
-    for (let r = 0; r < ROWS; r++) {
-      for (let c = 0; c < COLS; c++) {
+    for (let d = 0; d < COLS + ROWS - 1; d++) {
+      const cStart = Math.max(0, d - ROWS + 1);
+      const cEnd   = Math.min(COLS - 1, d);
+      for (let c = cStart; c <= cEnd; c++) {
+        const r = d - c;
         const op = G.fogOpacity[r * COLS + c];
         if (op <= 0.01) continue;
         ctx.globalAlpha = op;
@@ -2185,11 +2192,15 @@ class Game {
     const dt = Math.min((now - this._lastTime) / 1000, 0.1);
     this._lastTime = now;
 
-    if (this.G.gameState === 'playing') {
-      this._update(dt);
+    try {
+      if (this.G.gameState === 'playing') {
+        this._update(dt);
+      }
+      this.renderer.drawFrame(this.G);
+      this._updateHUD();
+    } catch (err) {
+      console.error('[Game] Loop error:', err);
     }
-    this.renderer.drawFrame(this.G);
-    this._updateHUD();
 
     this._raf = requestAnimationFrame((t) => this._loop(t));
   }
