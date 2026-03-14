@@ -42,11 +42,14 @@ const UI = (() => {
   // Toggle button
   if (sidebarToggle) {
     sidebarToggle.addEventListener('click', () => {
+      const gc = document.getElementById('game-container');
       if (sidebar.classList.contains('sidebar-visible')) {
         sidebar.classList.remove('sidebar-visible');
+        if (gc) gc.classList.remove('sidebar-open');
         sidebarToggle.style.right = '0';
       } else {
         sidebar.classList.add('sidebar-visible');
+        if (gc) gc.classList.add('sidebar-open');
         sidebarToggle.style.right = '192px';
         if (_sidebarG) _buildSidebarCards(_sidebarG);
       }
@@ -324,6 +327,8 @@ const UI = (() => {
       return;
     }
     sidebar.classList.add('sidebar-visible');
+    const gc = document.getElementById('game-container');
+    if (gc) gc.classList.add('sidebar-open');
     if (sidebarToggle) sidebarToggle.style.right = '192px';
     _buildSidebarCards(G);
   }
@@ -464,19 +469,14 @@ const UI = (() => {
   };
 
   function showPlacementCursor(col, row, w, h, valid) {
-    const x = col * TILE;
-    const y = row * TILE;
-    placementCursor.style.display = 'block';
-    placementCursor.style.left = x + 'px';
-    placementCursor.style.top  = y + 'px';
-    placementCursor.style.width  = (w * TILE) + 'px';
-    placementCursor.style.height = (h * TILE) + 'px';
-    placementCursor.style.borderColor = valid ? 'rgba(100,200,100,0.8)' : 'rgba(200,60,60,0.8)';
-    placementCursor.style.background  = valid ? 'rgba(100,200,100,0.12)' : 'rgba(200,60,60,0.12)';
+    // Store placement data for canvas-based iso rendering
+    placementCursor.style.display = 'none'; // hide DOM cursor — draw on canvas instead
+    window._placementCursor = { col, row, w, h, valid };
   }
 
   function hidePlacementCursor() {
     placementCursor.style.display = 'none';
+    window._placementCursor = null;
   }
 
   function resetVoice() {
