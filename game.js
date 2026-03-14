@@ -368,15 +368,20 @@ class Renderer {
         const isRoad = G.roads.has(idx);
 
         if (isRiver && !isBridge) {
-          // Water — deep military blue with ripple lines
-          ctx.fillStyle = '#1c3a5a';
-          ctx.fillRect(x, y, TILE, TILE);
-          ctx.strokeStyle = 'rgba(70,130,200,0.28)';
-          ctx.lineWidth = 1;
-          const rippleOff = (this._frame * 0.18 + c * 1.3) % TILE;
-          for (let rl = 0; rl < TILE; rl += 9) {
-            const yy = y + ((rl + rippleOff) % TILE);
-            ctx.beginPath(); ctx.moveTo(x + 2, yy); ctx.lineTo(x + TILE - 4, yy); ctx.stroke();
+          const waterSpr = (typeof GameSprites !== 'undefined') ? GameSprites.get('terrain_water') : null;
+          if (waterSpr) {
+            ctx.drawImage(waterSpr, x, y, TILE, TILE);
+          } else {
+            // Procedural water
+            ctx.fillStyle = '#1c3a5a';
+            ctx.fillRect(x, y, TILE, TILE);
+            ctx.strokeStyle = 'rgba(70,130,200,0.28)';
+            ctx.lineWidth = 1;
+            const rippleOff = (this._frame * 0.18 + c * 1.3) % TILE;
+            for (let rl = 0; rl < TILE; rl += 9) {
+              const yy = y + ((rl + rippleOff) % TILE);
+              ctx.beginPath(); ctx.moveTo(x + 2, yy); ctx.lineTo(x + TILE - 4, yy); ctx.stroke();
+            }
           }
         } else if (isBridge) {
           // Wooden bridge planks
@@ -390,15 +395,21 @@ class Renderer {
           ctx.fillRect(x, y, 3, TILE);
           ctx.fillRect(x + TILE - 3, y, 3, TILE);
         } else {
-          ctx.fillStyle = G.tileColors[idx];
-          ctx.fillRect(x, y, TILE, TILE);
-          if (isRoad) {
-            // Dirt road — tan overlay + edge shadows
-            ctx.fillStyle = 'rgba(160,120,55,0.32)';
+          // Terrain sprite check
+          const terrainKey = isRoad ? 'terrain_road' : 'terrain_grass';
+          const terrainSpr = (typeof GameSprites !== 'undefined') ? GameSprites.get(terrainKey) : null;
+          if (terrainSpr) {
+            ctx.drawImage(terrainSpr, x, y, TILE, TILE);
+          } else {
+            ctx.fillStyle = G.tileColors[idx];
             ctx.fillRect(x, y, TILE, TILE);
-            ctx.fillStyle = 'rgba(60,42,15,0.22)';
-            ctx.fillRect(x, y, 3, TILE);
-            ctx.fillRect(x + TILE - 3, y, 3, TILE);
+            if (isRoad) {
+              ctx.fillStyle = 'rgba(160,120,55,0.32)';
+              ctx.fillRect(x, y, TILE, TILE);
+              ctx.fillStyle = 'rgba(60,42,15,0.22)';
+              ctx.fillRect(x, y, 3, TILE);
+              ctx.fillRect(x + TILE - 3, y, 3, TILE);
+            }
           }
         }
 
@@ -561,6 +572,18 @@ class Renderer {
   }
 
   _drawBuildingShape(ctx, type, faction, x, y, pw, ph) {
+    // Sprite check — if a PNG is loaded for this building type, draw it and return
+    if (typeof GameSprites !== 'undefined') {
+      const sprite = GameSprites.get(`${type}:${faction}`);
+      if (sprite) {
+        ctx.drawImage(sprite, x + 2, y + 2, pw - 4, ph - 4);
+        const border = faction === 'enemy' ? '#cc3333' : faction === 'neutral' ? '#88aa88' : '#4499cc';
+        ctx.strokeStyle = border; ctx.lineWidth = 2;
+        ctx.strokeRect(x + 2, y + 2, pw - 4, ph - 4);
+        return;
+      }
+    }
+
     const isEnemy  = faction === 'enemy';
     const isNeutral = faction === 'neutral';
     const def = BUILDING_DEF[type];
@@ -1058,6 +1081,21 @@ class Renderer {
   }
 
   _drawUnitSprite(ctx, type, faction, x, y, color, angle) {
+    // Sprite check — if a PNG is loaded for this unit type, draw it and return
+    if (typeof GameSprites !== 'undefined') {
+      const sprite = GameSprites.get(`${type}:${faction}`)
+                  || GameSprites.get(`${type}:player`);
+      if (sprite) {
+        ctx.save();
+        ctx.translate(x, y);
+        ctx.rotate(angle);
+        const sz = TILE * 0.92;
+        ctx.drawImage(sprite, -sz / 2, -sz / 2, sz, sz);
+        ctx.restore();
+        return;
+      }
+    }
+
     const isEnemy = faction === 'enemy';
     const outlineC = isEnemy ? '#660000' : '#1a3a6a';
     const dk = _darken(color, 0.5);
