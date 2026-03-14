@@ -579,11 +579,13 @@ function createUnit(type, col, row, faction) {
     damage: def.damage,
     speed: def.speed,
     sight: def.sight,
-    path: [], target: null,
+    path: [], pathQueue: [], target: null,
     attackTarget: null, attackCooldown: 0,
     discovered: false, // for IC reward
     dead: false,
     buildTime: def.buildTime,
+    kills: 0, stars: 0,   // veterancy
+    loadedUnits: [],       // APC garrison
   };
 }
 

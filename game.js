@@ -495,6 +495,33 @@ class Renderer {
           ctx.fillRect(x + 2, y + 2, (pw - 4) * Math.max(0, Math.min(1, prog)), 4);
         }
       }
+
+      // Rally point flag marker on the building
+      if (b.rallyPoint) {
+        const rpx = b.rallyPoint.col * TILE + TILE / 2;
+        const rpy = b.rallyPoint.row * TILE + TILE / 2;
+        // Draw dashed line from building center to rally point
+        ctx.save();
+        ctx.strokeStyle = 'rgba(68,255,68,0.55)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([3, 3]);
+        ctx.beginPath();
+        ctx.moveTo(x + pw / 2, y + ph / 2);
+        ctx.lineTo(rpx, rpy);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        // Flag icon at rally point
+        ctx.fillStyle = '#44ff44';
+        ctx.beginPath();
+        ctx.arc(rpx, rpy, 4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = '#22aa22';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(rpx, rpy, 4, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+      }
     }
   }
 
@@ -856,6 +883,30 @@ class Renderer {
         ctx.textAlign = 'left';
       }
       ctx.globalAlpha = 1;
+
+      // Veterancy stars (player units only)
+      if (u.faction === 'player' && u.stars > 0) {
+        ctx.save();
+        ctx.font = '8px monospace';
+        ctx.textAlign = 'center';
+        const starColors = ['', '#d4aa00', '#c8c8c8', '#ffdd44'];
+        ctx.fillStyle = starColors[u.stars];
+        ctx.shadowColor = starColors[u.stars];
+        ctx.shadowBlur = 4;
+        ctx.fillText('★'.repeat(u.stars), x, y - 16);
+        ctx.shadowBlur = 0;
+        ctx.restore();
+      }
+
+      // APC: show passenger count badge
+      if (u.type === 'apc' && u.loadedUnits && u.loadedUnits.length > 0) {
+        ctx.save();
+        ctx.fillStyle = '#44aaff';
+        ctx.font = 'bold 9px monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText(`[${u.loadedUnits.length}]`, x, y - 16);
+        ctx.restore();
+      }
     }
   }
 
@@ -1477,7 +1528,7 @@ class Game {
       <h2>Intelligence is your most scarce resource.</h2>
       <p style="font-size:12px;color:#4a6a38;max-width:520px;text-align:center;line-height:1.8">Select your mission, Commander.</p>
       <div id="mission-select" style="display:flex;gap:16px;margin:8px 0"></div>
-      <p style="font-size:11px;color:#555">Left-click: select &nbsp;|&nbsp; Right-click: move &nbsp;|&nbsp; A+Right-click: attack-move &nbsp;|&nbsp; H: hold position &nbsp;|&nbsp; Ctrl+1-5: group &nbsp;|&nbsp; B: build &nbsp;|&nbsp; X: airstrike &nbsp;|&nbsp; Esc: pause</p>
+      <p style="font-size:11px;color:#555">Left-click: select &nbsp;|&nbsp; Shift+click: add to selection &nbsp;|&nbsp; Right-click: move &nbsp;|&nbsp; Shift+right-click: queue waypoint &nbsp;|&nbsp; A+Right-click: attack-move &nbsp;|&nbsp; H: hold &nbsp;|&nbsp; G: garrison APC &nbsp;|&nbsp; Right-click building: set rally &nbsp;|&nbsp; Ctrl+1-5: group &nbsp;|&nbsp; B: build &nbsp;|&nbsp; X: airstrike &nbsp;|&nbsp; Esc: pause</p>
     `;
     const ms = overlay.querySelector('#mission-select');
     for (const mission of MISSION_DATA) {
@@ -1630,6 +1681,12 @@ class Game {
           u.sight += commsTowers;
           if (G.upgrades.field_comms) u.sight += 1;
           if (G.upgrades.ghost_protocol && uType === 'spec_ops') u.damage = Math.round(u.damage * 1.25);
+          // Rally point: send to rally if set
+          if (b.rallyPoint) {
+            const rp = b.rallyPoint;
+            const p = _cachedPath(G, Math.floor(u.col), Math.floor(u.row), rp.col, rp.row);
+            if (p) u.path = p;
+          }
           G.units.push(u);
           if (b.trainQueue.length > 0) {
             const mult = G.upgrades.rapid_training ? 0.8 : 1.0;
@@ -1673,30 +1730,90 @@ class Game {
         const tx = next.col + 0.5, ty = next.row + 0.5;
         const dx = tx - u.col, dy = ty - u.row;
         const dist = Math.hypot(dx, dy);
-        const step = u.speed * dt;
+
+        // Terrain speed modifier
+        const tileIdx = Math.floor(u.row) * COLS + Math.floor(u.col);
+        let terrainMult = 1.0;
+        if (G.roads && G.roads.has(tileIdx)) terrainMult = 1.35;          // road: +35%
+        else if (G.features && G.features[tileIdx] === 1) terrainMult = 0.65; // trees: -35%
+        else if (G.features && G.features[tileIdx] === 2) terrainMult = 0.75; // rocks: -25%
+
+        const step = u.speed * terrainMult * dt;
         if (dist <= step) {
           u.col = tx; u.row = ty;
           u.path.shift();
+          // Dequeue next waypoint when path exhausted
+          if (u.path.length === 0 && u.pathQueue && u.pathQueue.length > 0) {
+            const nextWp = u.pathQueue.shift();
+            const p = _cachedPath(G, Math.floor(u.col), Math.floor(u.row), nextWp.col, nextWp.row);
+            if (p) u.path = p;
+          }
+          // Dequeue queued attack when path exhausted
+          if (u.path.length === 0 && u._queuedAttack && !u._queuedAttack.dead) {
+            u.attackTarget = u._queuedAttack;
+            u._queuedAttack = null;
+          }
         } else {
           u.col += (dx / dist) * step;
           u.row += (dy / dist) * step;
         }
       }
 
-      // Separation steering: push overlapping units apart (boid-style repulsion)
+      // Full boid steering: separation + cohesion + alignment
       if (!u.holdPosition) {
+        let sepX = 0, sepY = 0;
+        let cohX = 0, cohY = 0, cohN = 0;
+        let aliVx = 0, aliVy = 0, aliN = 0;
+        const SAME_FACTION = u.faction;
+
         for (const other of G.units) {
-          if (other === u || other.dead) continue;
+          if (other === u || other.dead || other.faction !== SAME_FACTION) continue;
           const sdx = u.col - other.col, sdy = u.row - other.row;
           const sd = Math.hypot(sdx, sdy);
+
+          // Separation (< 0.85 tile)
           if (sd < 0.85 && sd > 0.01) {
-            const f = (0.85 - sd) * 1.8 * dt;
-            u.col += (sdx / sd) * f;
-            u.row += (sdy / sd) * f;
-            u.col = Math.max(0, Math.min(COLS - 0.5, u.col));
-            u.row = Math.max(0, Math.min(ROWS - 0.5, u.row));
+            const f = (0.85 - sd) * 1.8;
+            sepX += (sdx / sd) * f;
+            sepY += (sdy / sd) * f;
+          }
+
+          // Cohesion + alignment (only within 3 tiles, only moving units in same group)
+          if (sd < 3.0 && sd > 0.01 && other.path.length > 0 && u.path.length > 0) {
+            cohX += other.col; cohY += other.row; cohN++;
+            // Alignment: estimate velocity from path
+            if (other.path.length > 0) {
+              const nx = (other.path[0].col + 0.5) - other.col;
+              const ny = (other.path[0].row + 0.5) - other.row;
+              const nm = Math.hypot(nx, ny);
+              if (nm > 0.01) { aliVx += nx / nm; aliVy += ny / nm; aliN++; }
+            }
           }
         }
+
+        // Apply separation
+        u.col += sepX * dt;
+        u.row += sepY * dt;
+
+        // Apply cohesion (gentle drift toward group center, only while moving)
+        if (cohN > 0 && u.path.length > 0) {
+          const cx = cohX / cohN - u.col, cy = cohY / cohN - u.row;
+          const cm = Math.hypot(cx, cy);
+          if (cm > 0.5) { // only pull when drifted >0.5 tiles from center
+            u.col += (cx / cm) * 0.25 * dt;
+            u.row += (cy / cm) * 0.25 * dt;
+          }
+        }
+
+        // Apply alignment (steer toward average heading, only while moving)
+        if (aliN > 0 && u.path.length > 0) {
+          const ax = aliVx / aliN, ay = aliVy / aliN;
+          u.col += ax * 0.12 * dt;
+          u.row += ay * 0.12 * dt;
+        }
+
+        u.col = Math.max(0, Math.min(COLS - 0.5, u.col));
+        u.row = Math.max(0, Math.min(ROWS - 0.5, u.row));
       }
 
       const def = UNIT_DEF[u.type];
@@ -1840,6 +1957,19 @@ class Game {
             }
           }
           if (u.attackTarget.hp <= 0) {
+            // Veterancy: credit the kill to the attacker
+            if (u.faction === 'player' && u.attackTarget.path !== undefined) {
+              u.kills = (u.kills || 0) + 1;
+              const prevStars = u.stars || 0;
+              u.stars = u.kills >= 20 ? 3 : u.kills >= 10 ? 2 : u.kills >= 5 ? 1 : 0;
+              if (u.stars > prevStars) {
+                // Star-up: apply bonus
+                const bonus = [0, 1.10, 1.20, 1.35][u.stars];
+                u.damage = Math.round(UNIT_DEF[u.type].damage * bonus);
+                u.maxHp   = Math.round(UNIT_DEF[u.type].hp    * (1 + (u.stars - 1) * 0.08));
+                u.hp = Math.min(u.hp + 20, u.maxHp);
+              }
+            }
             this._handleDeath(u.attackTarget);
             u.attackTarget = null;
           }
@@ -2238,19 +2368,32 @@ class Game {
       const x2 = Math.max(this._boxStart.x, pos.x);
       const y1 = Math.min(this._boxStart.y, pos.y);
       const y2 = Math.max(this._boxStart.y, pos.y);
-      const selected = this.G.units.filter(u =>
+      const inBox = this.G.units.filter(u =>
         !u.dead && u.faction === 'player' &&
         u.col * TILE >= x1 && u.col * TILE <= x2 &&
         u.row * TILE >= y1 && u.row * TILE <= y2
       );
-      this.G.selected = selected;
+      if (e.shiftKey) {
+        // Shift+drag: add to existing selection (no duplicates)
+        const ids = new Set(this.G.selected.map(s => s.id));
+        for (const u of inBox) if (!ids.has(u.id)) this.G.selected.push(u);
+      } else {
+        this.G.selected = inBox;
+      }
     } else {
       // Single click — check unit then building
       const clicked = this._entityAt(pos.col, pos.row);
       if (clicked) {
-        this.G.selected = [clicked];
+        if (e.shiftKey) {
+          // Shift+click: toggle in/out of selection
+          const idx = this.G.selected.indexOf(clicked);
+          if (idx === -1) this.G.selected = [...this.G.selected, clicked];
+          else this.G.selected = this.G.selected.filter((_, i) => i !== idx);
+        } else {
+          this.G.selected = [clicked];
+        }
       } else {
-        this.G.selected = [];
+        if (!e.shiftKey) this.G.selected = [];
       }
     }
 
@@ -2293,19 +2436,45 @@ class Game {
     }
 
     const playerUnits = G.selected.filter(u => u.path !== undefined && u.faction === 'player' && !u.dead);
+
+    // Rally point: if a building is the only selected entity, set its rally point
+    const selBuildings = G.selected.filter(b => b.w !== undefined && b.faction === 'player' && !b.dead);
+    if (selBuildings.length > 0 && playerUnits.length === 0) {
+      for (const b of selBuildings) {
+        b.rallyPoint = { col: pos.col, row: pos.row };
+      }
+      // Visual flash at rally target
+      _spawnHit(G, pos.col * TILE + TILE / 2, pos.row * TILE + TILE / 2, false);
+      SFX.uiClick();
+      return;
+    }
+
     if (playerUnits.length === 0) return;
 
     // Check if right-clicking on an enemy entity to attack
     const target = this._entityAt(pos.col, pos.row);
     if (target && target.faction === 'enemy') {
       for (const u of playerUnits) {
-        u.attackTarget = target;
-        u.path = [];
-        u.holdPosition = false;
-        u.attackMoveTarget = null;
+        if (e.shiftKey) {
+          // Queue: finish current path then attack
+          u._queuedAttack = target;
+        } else {
+          u.attackTarget = target;
+          u.path = [];
+          u.holdPosition = false;
+          u.attackMoveTarget = null;
+        }
       }
       return;
     }
+
+    // Check right-click on friendly APC to unload garrisoned units
+    const clickedFriendly = this._entityAt(pos.col, pos.row);
+    if (clickedFriendly && clickedFriendly.faction === 'player' && clickedFriendly.type === 'apc') {
+      this._unloadAPC(clickedFriendly, pos.col, pos.row);
+      return;
+    }
+
     if (G.attackMoveMode) {
       for (let i = 0; i < playerUnits.length; i++) {
         const u = playerUnits[i];
@@ -2324,15 +2493,25 @@ class Game {
       return;
     }
 
-    // Regular move order (clears hold position)
+    // Regular move order — shift queues, normal clears
     let anyMoved = false;
     for (let i = 0; i < playerUnits.length; i++) {
       const u = playerUnits[i];
       const offset = _formationOffset(i);
       const tc = Math.max(0, Math.min(COLS - 1, pos.col + offset.dc));
       const tr = Math.max(0, Math.min(ROWS - 1, pos.row + offset.dr));
-      const p = _cachedPath(G, Math.floor(u.col), Math.floor(u.row), tc, tr);
-      if (p) { u.path = p; u.attackTarget = null; u.holdPosition = false; u.attackMoveTarget = null; anyMoved = true; }
+      if (e.shiftKey) {
+        // Shift+right-click: queue a waypoint after the current path
+        if (!u.pathQueue) u.pathQueue = [];
+        u.pathQueue.push({ col: tc, row: tr });
+        anyMoved = true;
+      } else {
+        const p = _cachedPath(G, Math.floor(u.col), Math.floor(u.row), tc, tr);
+        if (p) {
+          u.path = p; u.attackTarget = null; u.holdPosition = false;
+          u.attackMoveTarget = null; u.pathQueue = []; anyMoved = true;
+        }
+      }
     }
     if (!anyMoved && playerUnits.length > 0) {
       UI.flashResourceRed(); // no path found — flash HUD as feedback
@@ -2405,6 +2584,23 @@ class Game {
             u.holdPosition = true;
             u.path = [];
             u.attackMoveTarget = null;
+          }
+        }
+        break;
+      case 'g': case 'G':
+        if (G.gameState === 'playing') {
+          // Load selected infantry into selected APC (or nearest APC)
+          const selectedApc = G.selected.find(u => !u.dead && u.type === 'apc' && u.faction === 'player');
+          if (selectedApc) {
+            this._loadIntoAPC(selectedApc);
+          } else {
+            // Find nearest friendly APC to any selected unit
+            const anyUnit = G.selected.find(u => !u.dead && u.faction === 'player');
+            if (anyUnit) {
+              const nearApc = G.units.find(u => !u.dead && u.type === 'apc' && u.faction === 'player' &&
+                Math.hypot(u.col - anyUnit.col, u.row - anyUnit.row) <= 2.5);
+              if (nearApc) this._loadIntoAPC(nearApc);
+            }
           }
         }
         break;
@@ -2541,6 +2737,43 @@ class Game {
     upg.apply(G);
     UI.updateSelectionInfo(G.selected, G);
     if (upg.id === 'emergency_airstrike') UI.voice('airstrike_ready');
+  }
+
+  // APC garrison: load nearby infantry into selected/clicked APC
+  _loadIntoAPC(apc) {
+    const G = this.G;
+    const CAPACITY = 3;
+    if (!apc || apc.type !== 'apc' || apc.dead) return;
+    if (apc.loadedUnits.length >= CAPACITY) return;
+    // Load selected infantry units within 2 tiles
+    const infantry = G.selected.filter(u =>
+      u !== apc && !u.dead && u.faction === 'player' && !u.path?.includes && // not another apc
+      UNIT_DEF[u.type] && !UNIT_DEF[u.type].flying && u.type !== 'apc' && u.type !== 'harvester' &&
+      Math.hypot(u.col - apc.col, u.row - apc.row) <= 2.5
+    );
+    const toLoad = infantry.slice(0, CAPACITY - apc.loadedUnits.length);
+    for (const u of toLoad) {
+      u.dead = true; // remove from world — stored inside APC
+      apc.loadedUnits.push({ type: u.type, hp: u.hp, maxHp: u.maxHp, damage: u.damage, kills: u.kills, stars: u.stars });
+    }
+    if (toLoad.length) SFX.uiClick();
+  }
+
+  _unloadAPC(apc, col, row) {
+    const G = this.G;
+    if (!apc || apc.type !== 'apc' || apc.dead || !apc.loadedUnits.length) return;
+    const unloaded = [...apc.loadedUnits];
+    apc.loadedUnits = [];
+    for (let i = 0; i < unloaded.length; i++) {
+      const data = unloaded[i];
+      const uc = Math.max(0, Math.min(COLS - 1, col + i - 1));
+      const ur = Math.max(0, Math.min(ROWS - 1, row));
+      const u = createUnit(data.type, uc, ur, 'player');
+      u.hp = data.hp; u.maxHp = data.maxHp; u.damage = data.damage;
+      u.kills = data.kills || 0; u.stars = data.stars || 0;
+      G.units.push(u);
+    }
+    SFX.uiClick();
   }
 }
 

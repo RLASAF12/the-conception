@@ -110,8 +110,12 @@ const UI = (() => {
       return;
     }
     if (selected.length > 1) {
-      selName.textContent = `${selected.length} units selected`;
-      selDet.textContent = selected.map(u => UNIT_DEF[u.type]?.label || '').join(', ');
+      const vets = selected.filter(u => u.stars > 0).length;
+      selName.textContent = `${selected.length} units selected${vets > 0 ? ` (${vets} veterans)` : ''}`;
+      selDet.textContent = selected.map(u => {
+        const s = u.stars > 0 ? '★'.repeat(u.stars) + ' ' : '';
+        return s + (UNIT_DEF[u.type]?.label || '');
+      }).join(', ');
       selQueue.textContent = '';
       _renderBuildPanel(null, G);
       return;
@@ -120,8 +124,12 @@ const UI = (() => {
     // Unit
     if (e.path !== undefined) {
       const def = UNIT_DEF[e.type];
-      selName.textContent = def.label;
-      selDet.textContent = `HP: ${Math.ceil(e.hp)}/${e.maxHp}  Speed: ${e.speed}  Sight: ${e.sight}`;
+      const starStr = e.stars > 0 ? '  ' + '★'.repeat(e.stars) + ` (${e.kills} kills)` : '';
+      const garStr  = (e.type === 'apc' && e.loadedUnits && e.loadedUnits.length > 0)
+        ? `  Garrison: ${e.loadedUnits.length}/3 — press G near infantry to load, Right-click APC to unload` : '';
+      const queueStr = (e.pathQueue && e.pathQueue.length > 0) ? `  Waypoints: ${e.pathQueue.length}` : '';
+      selName.textContent = def.label + starStr;
+      selDet.textContent = `HP: ${Math.ceil(e.hp)}/${e.maxHp}  Speed: ${e.speed.toFixed(1)}  Sight: ${e.sight}${garStr}${queueStr}`;
       selQueue.textContent = '';
       _renderBuildPanel(null, G);
     } else {
@@ -130,7 +138,8 @@ const UI = (() => {
       selName.textContent = def.label;
       const hpText = `HP: ${Math.ceil(e.hp)}/${e.maxHp}`;
       const prog = e.buildProgress < 1 ? `  Building: ${Math.floor(e.buildProgress*100)}%` : '';
-      selDet.textContent = hpText + prog;
+      const rallyStr = e.rallyPoint ? `  Rally: (${e.rallyPoint.col},${e.rallyPoint.row}) — right-click ground to move` : '  Right-click ground to set rally point';
+      selDet.textContent = hpText + prog + (def.trainable && def.trainable.length ? rallyStr : '');
       if (e.trainQueue && e.trainQueue.length > 0) {
         selQueue.textContent = `Queue: ${e.trainQueue.map(t => UNIT_DEF[t]?.label).join(', ')}`;
       } else {
