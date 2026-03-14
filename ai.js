@@ -26,17 +26,20 @@ const AI = (() => {
     resources: 500,
     heaviesUnlocked: false,
     tanksUnlocked: false,
-    waveTimer: 90,      // first wave fires at 90s mark
+    waveTimer: 60,      // first wave fires at 60s mark (was 90)
+    earlyProbesSent: 0, // track early harassment probes
   };
 
   function tick(G, dt) {
-    state.resources = Math.min(state.resources + 20 * dt, 1500);
+    // Faster resource gain in early phases to build up quicker
+    const resRate = G.aiBuildPhase === 0 ? 30 : 20;
+    state.resources = Math.min(state.resources + resRate * dt, 1500);
 
     // Phase transitions
     const elapsed = G.elapsedTime;
 
-    if (G.aiBuildPhase === 0 && elapsed >= 180) G.aiBuildPhase = 1; // 3 min
-    if (G.aiBuildPhase === 1 && elapsed >= 360) G.aiBuildPhase = 2; // 6 min
+    if (G.aiBuildPhase === 0 && elapsed >= 120) G.aiBuildPhase = 1; // 2 min (was 3)
+    if (G.aiBuildPhase === 1 && elapsed >= 300) G.aiBuildPhase = 2; // 5 min (was 6)
 
     // Emergency escalation: if player unit crosses col 18, rush to phase 2
     if (G.aiBuildPhase < 2) {
@@ -44,16 +47,28 @@ const AI = (() => {
       if (playerCrossed) G.aiBuildPhase = 2;
     }
 
+    // Update AI plugin cooldown
+    if (typeof AIPlugin !== 'undefined') AIPlugin.update(dt);
+
     _build(G);
     _train(G, dt);
     _updateFSM(G, dt);
 
-    // Wave timer: start from phase 1, every 90s
+    // Early harassment probes: send small groups before phase 1
+    if (G.aiBuildPhase === 0 && state.earlyProbesSent < 3) {
+      const probeThresholds = [30, 50, 80]; // seconds
+      if (elapsed >= probeThresholds[state.earlyProbesSent]) {
+        _launchProbe(G);
+        state.earlyProbesSent++;
+      }
+    }
+
+    // Wave timer: start from phase 1, every 70s (was 90)
     if (G.aiBuildPhase >= 1) {
       state.waveTimer -= dt;
       if (state.waveTimer <= 0) {
         _launchWave(G);
-        state.waveTimer = 90;
+        state.waveTimer = 70;
       }
     }
 
@@ -284,6 +299,27 @@ const AI = (() => {
     }
   }
 
+  // Launch small early harassment probe (1-3 scouts/soldiers)
+  function _launchProbe(G) {
+    const scouts = G.units.filter(u =>
+      u.faction === 'enemy' && !u.dead && u.path.length === 0 && !u.attackTarget &&
+      u.aiState !== STATE.RETREAT && u.col < 14 &&
+      (u.type === 'veil_scout' || u.type === 'veil_soldier' || u.type === 'veil_drone')
+    );
+    if (scouts.length === 0) return;
+    const probeSize = Math.min(scouts.length, 1 + Math.floor(Math.random() * 2));
+    // Pick a random row to approach from (vary attack angle)
+    const targetRows = [4, 10, 14, 18, 24];
+    const targetRow = targetRows[Math.floor(Math.random() * targetRows.length)];
+    for (let i = 0; i < probeSize; i++) {
+      const u = scouts[i];
+      u.aiState = STATE.ASSAULT;
+      u.aiStateTimer = 0;
+      u.retreating = false;
+      _assignTargetSmart(u, G, UNIT_DEF[u.type], targetRow);
+    }
+  }
+
   // Launch a coordinated wave with optional flanking
   function _launchWave(G) {
     const readyUnits = G.units.filter(u =>
@@ -291,6 +327,11 @@ const AI = (() => {
       u.aiState !== STATE.RETREAT && u.col < 16
     );
     if (readyUnits.length < 3) return;
+
+    // Try external AI for wave targeting (non-blocking, uses last response if available)
+    if (typeof AIPlugin !== 'undefined' && AIPlugin.isEnabled()) {
+      AIPlugin.requestDecision(G, 'wave_target'); // fire-and-forget, result used next wave
+    }
 
     // Detect player concentration at bridge area (center corridor)
     const bridgeCount = G.units.filter(u =>
@@ -306,7 +347,10 @@ const AI = (() => {
       !u.dead && u.faction === 'player' && u.col >= 16 && u.col <= 27 && u.row > 18
     ).length;
 
-    // Decide wave routing
+    // Decide wave routing — vary attack angles even without heavy bridge defense
+    const attackAngles = [4, 8, 14, 20, 24]; // spread across map rows
+    const baseAngle = attackAngles[Math.floor(Math.random() * attackAngles.length)];
+
     for (let i = 0; i < readyUnits.length; i++) {
       const u = readyUnits[i];
       const def = UNIT_DEF[u.type];
@@ -314,14 +358,19 @@ const AI = (() => {
       u.aiStateTimer = 0;
       u.retreating = false;
 
-      let targetRow = 14; // default: center bridge corridor
+      let targetRow = baseAngle; // randomized base angle per wave
       if (bridgeCount >= 4) {
+        // Heavy bridge defense: force flanking
         const flankRoll = i % 5;
-        if (flankRoll === 1 || flankRoll === 2) {
-          targetRow = northCoverage < 2 ? 4 : 14;
-        } else if (flankRoll === 3) {
+        if (flankRoll <= 1) {
+          targetRow = northCoverage < southCoverage ? (3 + Math.floor(Math.random() * 6)) : (22 + Math.floor(Math.random() * 5));
+        } else if (flankRoll === 2) {
           targetRow = southCoverage < 2 ? 24 : 14;
         }
+      } else {
+        // Spread units across 2-3 angles for variety
+        const spread = [-4, 0, 0, 4][i % 4];
+        targetRow = Math.max(2, Math.min(ROWS - 2, baseAngle + spread));
       }
 
       _assignTargetSmart(u, G, def, targetRow);
