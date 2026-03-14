@@ -16,6 +16,111 @@ const UI = (() => {
   const alertFlash = document.getElementById('alert-flash');
   const placementCursor = document.getElementById('placement-cursor');
 
+  // ---- Sidebar state ----
+  const sidebar = document.getElementById('build-sidebar');
+  const sidebarIC = document.getElementById('sidebar-ic');
+  const sidebarPower = document.getElementById('sidebar-power');
+  const sidebarList = document.getElementById('sidebar-building-list');
+  const sidebarTabs = document.querySelectorAll('.sidebar-tab');
+  const sidebarToggle = document.getElementById('sidebar-toggle');
+  let _sidebarCat = 'base';
+  let _sidebarOnPlace = null;
+  let _sidebarG = null;
+  let _sidebarLastBuildingCount = -1;
+  let _sidebarLastIC = -1;
+
+  // Tab switching
+  sidebarTabs.forEach(tab => {
+    tab.addEventListener('click', () => {
+      sidebarTabs.forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      _sidebarCat = tab.dataset.cat;
+      if (_sidebarG) _buildSidebarCards(_sidebarG);
+    });
+  });
+
+  // Toggle button
+  if (sidebarToggle) {
+    sidebarToggle.addEventListener('click', () => {
+      if (sidebar.classList.contains('sidebar-visible')) {
+        sidebar.classList.remove('sidebar-visible');
+        sidebarToggle.style.right = '0';
+      } else {
+        sidebar.classList.add('sidebar-visible');
+        sidebarToggle.style.right = '192px';
+        if (_sidebarG) _buildSidebarCards(_sidebarG);
+      }
+    });
+  }
+
+  // Upgrade button in sidebar footer
+  document.getElementById('sidebar-upgrade-btn').addEventListener('click', () => {
+    if (_sidebarG) showUpgradePanel(_sidebarG);
+  });
+
+  // HUD action buttons — mouse-clickable fallbacks for keyboard shortcuts
+  document.getElementById('btn-build')?.addEventListener('click', () => window._hudBuild?.());
+  document.getElementById('btn-upgrades')?.addEventListener('click', () => { if (_sidebarG) showUpgradePanel(_sidebarG); });
+  document.getElementById('btn-atkmove')?.addEventListener('click', () => window._hudAtkMove?.());
+  document.getElementById('btn-hold')?.addEventListener('click', () => window._hudHold?.());
+  document.getElementById('btn-airstrike')?.addEventListener('click', () => window._hudAirstrike?.());
+
+  const PLAYER_BUILDINGS = [
+    'barracks','quarry','watchtower','wall','fortified_wall',
+    'field_ops','motor_pool','defense_works',
+    'radar_station','bunker','supply_depot','comms_tower','hospital','forward_post',
+    'power_plant',
+  ];
+
+  function _prereqsMet(def, G) {
+    const prereqs = def.prereq || [];
+    for (const req of prereqs) {
+      const has = G.buildings.some(b => b.type === req && b.faction === 'player' && !b.dead && b.buildProgress >= 1);
+      if (!has) return false;
+    }
+    return true;
+  }
+
+  function _buildSidebarCards(G) {
+    sidebarList.innerHTML = '';
+    const filtered = PLAYER_BUILDINGS.filter(t => BUILDING_DEF[t].category === _sidebarCat);
+    for (const bType of filtered) {
+      const def = BUILDING_DEF[bType];
+      const count = G.buildings.filter(b => b.type === bType && b.faction === 'player' && !b.dead).length;
+      const atMax = def.maxCount !== undefined && def.maxCount !== Infinity && count >= def.maxCount;
+      const locked = !_prereqsMet(def, G);
+      const cantAfford = G.ic < def.cost;
+
+      const card = document.createElement('div');
+      card.className = 'sidebar-building-card';
+      if (locked) card.classList.add('locked');
+      else if (atMax) card.classList.add('maxed');
+
+      const lockIcon = locked ? `<span class="sbc-lock-icon">&#128274;</span>` : '';
+      const badge = atMax ? `<span class="sbc-badge">[MAX]</span>` :
+                    cantAfford && !locked ? `<span class="sbc-badge" style="color:#887733">[NO IC]</span>` : '';
+      const prereqNames = (def.prereq || []).map(r => BUILDING_DEF[r]?.label || r).join(', ');
+      const prereqNote = locked && prereqNames ? `<div style="font-size:9px;color:#885522;margin-top:2px">Needs: ${prereqNames}</div>` : '';
+
+      card.innerHTML = `
+        <div class="sbc-name">${lockIcon}${def.label}${badge}</div>
+        <div class="sbc-cost">${def.cost} IC &nbsp; ⚡${def.power > 0 ? '+' : ''}${def.power || 0}</div>
+        ${prereqNote}
+        <div class="sbc-bonus">${def.bonus || ''}</div>
+      `;
+
+      if (!locked && !atMax) {
+        card.addEventListener('click', () => {
+          if (window.SFX) SFX.uiClick();
+          if (_sidebarOnPlace) _sidebarOnPlace(bType);
+        });
+      }
+      sidebarList.appendChild(card);
+    }
+    _sidebarLastBuildingCount = G.buildings.filter(b => b.faction === 'player' && !b.dead).length;
+    _sidebarLastIC = Math.floor(G.ic);
+  }
+
   const VOICE_LINES = {
     game_start:          'All quiet on the border, Commander. For now.',
     first_scout:         'Scout is moving. Keep them alive.',
@@ -61,6 +166,18 @@ const UI = (() => {
   function updateResource(ic) {
     resBar.textContent = `IC: ${Math.floor(ic)}`;
     resBar.style.color = ic < 50 ? '#ff6666' : '#e8d87a';
+    if (sidebarIC) {
+      sidebarIC.textContent = `IC: ${Math.floor(ic)}`;
+      sidebarIC.style.color = ic < 50 ? '#ff6666' : '#ccee44';
+    }
+    // Refresh sidebar cards if IC crossed affordability thresholds
+    if (_sidebarG && sidebar.classList.contains('sidebar-visible')) {
+      const newIC = Math.floor(ic);
+      const bCount = _sidebarG.buildings.filter(b => b.faction === 'player' && !b.dead).length;
+      if (Math.abs(newIC - _sidebarLastIC) >= 10 || bCount !== _sidebarLastBuildingCount) {
+        _buildSidebarCards(_sidebarG);
+      }
+    }
   }
 
   function updatePower(level) {
@@ -69,6 +186,10 @@ const UI = (() => {
     const sign = level >= 0 ? '+' : '';
     el.textContent = `⚡ ${sign}${level}`;
     el.style.color = level >= 0 ? '#aaee44' : level >= -3 ? '#eecc22' : '#ff4444';
+    if (sidebarPower) {
+      sidebarPower.textContent = `⚡ ${sign}${level}`;
+      sidebarPower.style.color = level >= 0 ? '#88cc44' : level >= -3 ? '#eecc22' : '#ff4444';
+    }
   }
 
   function flashResourceRed() {
@@ -195,32 +316,16 @@ const UI = (() => {
   }
 
   function showBuildMenu(G, onPlace) {
-    buildPanel.innerHTML = '';
-    const playerBuildings = [
-      'barracks','quarry','watchtower','wall','fortified_wall',
-      'field_ops','motor_pool','defense_works',
-      'radar_station','bunker','supply_depot','comms_tower','hospital','forward_post',
-      'power_plant',
-    ];
-    for (const bType of playerBuildings) {
-      const def = BUILDING_DEF[bType];
-      const count = G.buildings.filter(b => b.type === bType && b.faction === 'player' && !b.dead).length;
-      const atMax = def.maxCount !== undefined && count >= def.maxCount;
-      const btn = document.createElement('button');
-      btn.className = 'build-btn';
-      btn.textContent = `${def.label}  (${def.cost} IC)${atMax ? ' [MAX]' : ''}`;
-      if (atMax || G.ic < def.cost) btn.disabled = true;
-      btn.onclick = () => {
-        if (!atMax && G.ic >= def.cost) { if (window.SFX) SFX.uiClick(); onPlace(bType); }
-      };
-      buildPanel.appendChild(btn);
+    _sidebarG = G;
+    _sidebarOnPlace = onPlace;
+    // Toggle sidebar visibility; if already open just refresh
+    if (sidebar.classList.contains('sidebar-visible')) {
+      _buildSidebarCards(G);
+      return;
     }
-    // cancel
-    const cancel = document.createElement('button');
-    cancel.className = 'build-btn';
-    cancel.textContent = '— CANCEL —';
-    cancel.onclick = () => { if (window.G) window.G.cancelBuildMode(); };
-    buildPanel.appendChild(cancel);
+    sidebar.classList.add('sidebar-visible');
+    if (sidebarToggle) sidebarToggle.style.right = '192px';
+    _buildSidebarCards(G);
   }
 
   function showUpgradePanel(G) {
