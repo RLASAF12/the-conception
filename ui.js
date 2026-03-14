@@ -94,6 +94,7 @@ const UI = (() => {
   }
 
   function triggerAlertFlash() {
+    if (window.SFX) SFX.alertSound();
     alertFlash.classList.remove('alert-flash-active');
     void alertFlash.offsetWidth; // reflow
     alertFlash.classList.add('alert-flash-active');
@@ -167,6 +168,7 @@ const UI = (() => {
         btn.textContent += ' [MAX]';
       }
       btn.onclick = () => {
+        if (window.SFX) SFX.uiClick();
         if (window.G) window.G.trainUnit(building, uType);
       };
       buildPanel.appendChild(btn);
@@ -189,7 +191,7 @@ const UI = (() => {
       btn.textContent = `${def.label}  (${def.cost} IC)${atMax ? ' [MAX]' : ''}`;
       if (atMax || G.ic < def.cost) btn.disabled = true;
       btn.onclick = () => {
-        if (!atMax && G.ic >= def.cost) onPlace(bType);
+        if (!atMax && G.ic >= def.cost) { if (window.SFX) SFX.uiClick(); onPlace(bType); }
       };
       buildPanel.appendChild(btn);
     }

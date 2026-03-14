@@ -173,6 +173,7 @@ function createGameState() {
     elapsedTime: 0,
     fog, fogOpacity, fogLit, grid, buildings, units,
     tileColors, roads, features, riverTiles,
+    particles: [],
     selected: [],
     settlementsFallen: 0,
     gameState: 'playing', // playing | paused | win | lose
@@ -290,6 +291,7 @@ class Renderer {
     this._drawTerrain(ctx, G);
     this._drawBuildings(ctx, G);
     this._drawUnits(ctx, G);
+    this._drawParticles(ctx, G);
     this._drawFog(ctx, G);
     this._drawSelectionHighlights(ctx, G);
     this._drawHpBars(ctx, G);
@@ -1154,6 +1156,23 @@ class Renderer {
     }
   }
 
+  // ─── PARTICLES ──────────────────────────────────────────────
+  _drawParticles(ctx, G) {
+    for (const p of G.particles) {
+      const alpha = p.life / p.maxLife; // 1=fresh → 0=dead
+      let r = p.r;
+      if (p.type === 'smoke')  r = p.r * (0.4 + (1 - alpha) * 0.6); // smoke grows
+      else if (p.type === 'fire') r = p.r * alpha;                    // fire shrinks
+      if (r < 0.3) continue;
+      ctx.globalAlpha = p.type === 'smoke' ? alpha * 0.55 : alpha;
+      ctx.fillStyle = `rgba(${p.rgb},1)`;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+
   // ─── MINIMAP ────────────────────────────────────────────────
   _drawMinimap(G) {
     const mctx = this.mctx;
@@ -1192,6 +1211,147 @@ class Renderer {
     mctx.strokeStyle = 'rgba(255,255,255,0.55)';
     mctx.lineWidth = 0.5;
     mctx.strokeRect(0, 0, this.mW, this.mH);
+  }
+}
+
+// ============================================================
+// SOUND ENGINE — Procedural Web Audio (no external files)
+// ============================================================
+class SoundEngine {
+  constructor() {
+    try {
+      this._ac = new (window.AudioContext || window.webkitAudioContext)();
+      this._master = this._ac.createGain();
+      this._master.gain.value = 0.3;
+      this._master.connect(this._ac.destination);
+      this._ok = true;
+    } catch(e) { this._ok = false; }
+  }
+
+  _resume() { if (this._ac && this._ac.state === 'suspended') this._ac.resume(); }
+
+  _noiseBuf() {
+    const len = this._ac.sampleRate;
+    const buf = this._ac.createBuffer(1, len, this._ac.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+    return buf;
+  }
+
+  // White noise burst filtered to freq, with volume decay over dur seconds
+  _noise(freq, Q, vol, dur, freqEnd) {
+    if (!this._ok) return;
+    this._resume();
+    const ac = this._ac, t = ac.currentTime;
+    const src = ac.createBufferSource();
+    src.buffer = this._noiseBuf();
+    const filt = ac.createBiquadFilter();
+    filt.type = 'bandpass';
+    filt.frequency.setValueAtTime(freq, t);
+    if (freqEnd) filt.frequency.exponentialRampToValueAtTime(freqEnd, t + dur);
+    filt.Q.value = Q;
+    const g = ac.createGain();
+    g.gain.setValueAtTime(vol, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+    src.connect(filt); filt.connect(g); g.connect(this._master);
+    src.start(t); src.stop(t + dur + 0.05);
+  }
+
+  // Oscillator tone with freq sweep and volume decay
+  _tone(freq, vol, dur, freqEnd, shape = 'square') {
+    if (!this._ok) return;
+    this._resume();
+    const ac = this._ac, t = ac.currentTime;
+    const osc = ac.createOscillator();
+    osc.type = shape;
+    osc.frequency.setValueAtTime(freq, t);
+    if (freqEnd) osc.frequency.exponentialRampToValueAtTime(freqEnd, t + dur);
+    const g = ac.createGain();
+    g.gain.setValueAtTime(vol, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+    osc.connect(g); g.connect(this._master);
+    osc.start(t); osc.stop(t + dur + 0.05);
+  }
+
+  // ── Public SFX ──
+  shootInfantry()  { this._noise(1800 + Math.random()*600, 2.5, 0.35, 0.09); }
+  shootVehicle()   { this._noise(700, 1.8, 0.45, 0.13); this._tone(110, 0.25, 0.1, 55); }
+  shootTank()      { this._noise(380, 1.2, 0.75, 0.20); this._tone(75, 0.55, 0.18, 38); }
+  shootArtillery() { this._noise(280, 1.0, 1.0, 0.28, 75); this._tone(55, 0.7, 0.28, 28); }
+  shootAA()        { this._noise(2200, 3, 0.4, 0.06); this._noise(2200, 3, 0.35, 0.06); }
+  hit()            { this._noise(1100, 4, 0.25, 0.05); }
+  explodeSmall()   { this._noise(480, 0.9, 0.85, 0.38, 55); this._tone(95, 0.45, 0.24, 38); }
+  explodeLarge()   { this._noise(320, 0.65, 1.1, 0.65, 38); this._tone(62, 0.75, 0.48, 22); this._tone(38, 0.4, 0.5, 18, 'sawtooth'); }
+  buildPlace()     { this._tone(420, 0.28, 0.07); this._tone(640, 0.18, 0.06); }
+  uiClick()        { this._tone(780, 0.12, 0.04, 580); }
+  alertSound()     { this._tone(860, 0.38, 0.11); this._tone(640, 0.28, 0.11); }
+}
+const SFX = new SoundEngine();
+
+// ============================================================
+// PARTICLE SYSTEM — combat visual effects
+// ============================================================
+
+// Spawn muzzle flash sparks at (px,py) aimed at angle
+function _spawnMuzzle(G, px, py, angle) {
+  for (let i = 0; i < 7; i++) {
+    const a = angle + (Math.random() - 0.5) * 0.9;
+    const spd = 25 + Math.random() * 70;
+    G.particles.push({ x: px, y: py, vx: Math.cos(a)*spd, vy: Math.sin(a)*spd,
+      life: 0.07 + Math.random()*0.06, maxLife: 0.13,
+      r: 1.5 + Math.random()*2.5, rgb: `255,${160+Math.random()*80|0},20`,
+      type: 'spark', grav: 0 });
+  }
+}
+
+// Spawn hit sparks at impact position
+function _spawnHit(G, px, py, isEnemy) {
+  const n = 4 + Math.random()*5|0;
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const spd = 35 + Math.random() * 90;
+    G.particles.push({ x: px, y: py, vx: Math.cos(a)*spd, vy: Math.sin(a)*spd,
+      life: 0.12 + Math.random()*0.18, maxLife: 0.3,
+      r: 1.2 + Math.random()*2, rgb: isEnemy ? '255,70,15' : '255,190,40',
+      type: 'spark', grav: 80 });
+  }
+}
+
+// Spawn full explosion at (px, py) — size: 'small'|'large'
+function _spawnExplosion(G, px, py, size) {
+  const big = size === 'large';
+  const n = big ? 18 : 10;
+  // Fireballs
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const spd = (big ? 65 : 42) + Math.random() * 85;
+    const cols = ['255,80,10', '255,145,20', '255,205,50'];
+    G.particles.push({ x: px+(Math.random()-.5)*10, y: py+(Math.random()-.5)*10,
+      vx: Math.cos(a)*spd, vy: Math.sin(a)*spd,
+      life: 0.28 + Math.random()*0.38, maxLife: 0.66,
+      r: (big ? 7 : 4) + Math.random()*4,
+      rgb: cols[Math.floor(Math.random()*cols.length)],
+      type: 'fire', grav: -18 });
+  }
+  // Smoke puffs
+  const ns = big ? 9 : 5;
+  for (let i = 0; i < ns; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const spd = 12 + Math.random() * 28;
+    G.particles.push({ x: px, y: py, vx: Math.cos(a)*spd, vy: Math.sin(a)*spd - 22,
+      life: 0.55 + Math.random()*0.55, maxLife: 1.1,
+      r: (big ? 9 : 5) + Math.random()*5,
+      rgb: '75,65,55', type: 'smoke', grav: -28 });
+  }
+  // Debris chunks
+  const nd = big ? 11 : 6;
+  for (let i = 0; i < nd; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const spd = 55 + Math.random() * 130;
+    G.particles.push({ x: px, y: py, vx: Math.cos(a)*spd, vy: Math.sin(a)*spd - 35,
+      life: 0.35 + Math.random()*0.35, maxLife: 0.7,
+      r: 1.8 + Math.random()*2.8,
+      rgb: '55,45,35', type: 'debris', grav: 130 });
   }
 }
 
@@ -1261,6 +1421,7 @@ class Game {
     AI.tick(G, dt);
     this._updateUnits(dt);
     this._updateFog();
+    this._updateParticles(dt);
     G._settlementDt = dt;
     this._updateSettlements();
     this._checkWinLose();
@@ -1446,8 +1607,27 @@ class Game {
         } else if (u.attackCooldown <= 0) {
           u.attackCooldown = ATTACK_COOLDOWN;
           u.attackTarget.hp -= def.damage;
+
+          // ── Muzzle flash + hit spark particles ──
+          const ax = u.col * TILE, ay = u.row * TILE;
+          const bx2 = tx * TILE, by2 = ty * TILE;
+          const shotAngle = Math.atan2(by2 - ay, bx2 - ax);
+          _spawnMuzzle(G, ax, ay, shotAngle);
+          _spawnHit(G, bx2, by2, u.attackTarget.faction === 'enemy');
+
+          // ── Shoot sound based on unit type ──
+          switch (def.label) {
+            case 'Tank': case 'Veil Tank': SFX.shootTank(); break;
+            case 'Artillery': case 'Veil Artillery': SFX.shootArtillery(); break;
+            case 'Anti-Air': SFX.shootAA(); break;
+            case 'Scout Vehicle': case 'APC': case 'Veil Raider':
+            case 'Veil Troop Truck': SFX.shootVehicle(); break;
+            default: SFX.shootInfantry(); break;
+          }
+
           // splash for tanks, artillery, bombers
           if (def.splash && def.splashRange) {
+            _spawnExplosion(G, bx2, by2, def.splashRange >= 2 ? 'large' : 'small');
             for (const other of G.units) {
               if (other === u.attackTarget || other.dead || other.faction === u.faction) continue;
               if (Math.hypot(other.col - tx, other.row - ty) <= def.splashRange) {
@@ -1524,8 +1704,20 @@ class Game {
     entity.dead = true;
     entity.hp = 0;
 
+    // ── Death explosion particles + sound ──
+    const isBuilding = entity.w !== undefined;
+    const ex = (entity.col + (isBuilding ? entity.w / 2 : 0)) * TILE;
+    const ey = (entity.row + (isBuilding ? entity.h / 2 : 0)) * TILE;
+    if (isBuilding) {
+      _spawnExplosion(G, ex, ey, 'large');
+      SFX.explodeLarge();
+    } else {
+      _spawnExplosion(G, ex, ey, 'small');
+      SFX.explodeSmall();
+    }
+
     // Remove from grid if building
-    if (entity.w !== undefined) {
+    if (isBuilding) {
       _markGrid(G.grid, entity.col, entity.row, entity.w, entity.h, 0);
       _invalidatePathCache(G);
     }
@@ -1648,6 +1840,20 @@ class Game {
           UI.voice('first_enemy_building');
         }
       }
+    }
+  }
+
+  _updateParticles(dt) {
+    const p = this.G.particles;
+    for (let i = p.length - 1; i >= 0; i--) {
+      const pt = p[i];
+      pt.life -= dt;
+      if (pt.life <= 0) { p.splice(i, 1); continue; }
+      pt.x += pt.vx * dt;
+      pt.y += pt.vy * dt;
+      if (pt.grav) pt.vy += pt.grav * dt;
+      pt.vx *= 0.97;
+      pt.vy *= 0.97;
     }
   }
 
@@ -2086,6 +2292,7 @@ class Game {
     G.ic -= def.cost;
     const b = createBuilding(type, col, row, 'player');
     G.buildings.push(b);
+    SFX.buildPlace();
     // mark grid immediately to prevent overlap during construction
     _markGrid(G.grid, col, row, w, h, 1);
     _invalidatePathCache(G);
