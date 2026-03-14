@@ -5,8 +5,13 @@
 const TILE = 32;
 const COLS = 40;
 const ROWS = 30;
-const CANVAS_W = 1280;
-const CANVAS_H = 840; // 960 - 120px HUD
+// Isometric projection constants
+const ISO_W = 40;           // iso tile width (diamond width in screen pixels)
+const ISO_H = 20;           // iso tile height (diamond height, always ISO_W / 2)
+const ISO_OX = ROWS * ISO_W / 2 + 20; // horizontal origin offset (top corner of grid)
+const ISO_OY = 40;          // vertical top margin
+const CANVAS_W = 1440;
+const CANVAS_H = 900;       // fits iso grid + HUD
 
 // ---- Faction colours — Red Alert military palette ----
 const COL = {
@@ -28,200 +33,200 @@ const BUILDING_DEF = {
     label: 'Command Base', faction: 'player',
     hp: 500, cost: 0, buildTime: 0, size: [2,2], sight: 6,
     color: '#2a6acc', trainable: ['drone','helicopter'], power: +5,
-    prereq: [], category: 'base', controlRadius: 7,
+    prereq: [], category: 'base', controlRadius: 7, isoHeight: 36,
     bonus: 'Trains Drones & Helicopters. +5 power.',
   },
   barracks: {
     label: 'Barracks', faction: 'player',
     hp: 250, cost: 200, buildTime: 20, size: [2,2], sight: 0,
     color: '#4a7a22', trainable: ['soldier','scout_vehicle','tank','spec_ops'], maxCount: 2, power: -2,
-    prereq: [], category: 'production', controlRadius: 4,
+    prereq: [], category: 'production', controlRadius: 4, isoHeight: 24,
     bonus: 'Trains infantry & tanks. Unlocks Field Ops & Motor Pool.',
   },
   quarry: {
     label: 'Quarry', faction: 'player',
     hp: 200, cost: 150, buildTime: 15, size: [1,2], sight: 0,
     color: '#7a5a28', trainable: [], maxCount: 3, power: 0,
-    prereq: [], category: 'base', controlRadius: 3,
+    prereq: [], category: 'base', controlRadius: 3, isoHeight: 18,
     bonus: 'Opens the Upgrade Store to buy tech upgrades.',
   },
   watchtower: {
     label: 'Watchtower', faction: 'player',
     hp: 150, cost: 100, buildTime: 10, size: [1,1], sight: 8,
     color: '#3a6a2a', trainable: [], maxCount: 5, power: -1,
-    prereq: [], category: 'defense', controlRadius: 3,
+    prereq: [], category: 'defense', controlRadius: 3, isoHeight: 40,
     bonus: 'Sight radius 8 tiles. 5 max.',
   },
   wall: {
     label: 'Wall', faction: 'player',
     hp: 300, cost: 30, buildTime: 5, size: [1,1], sight: 0,
     color: '#7a7a7a', trainable: [], maxCount: Infinity, power: 0,
-    prereq: [], category: 'defense', controlRadius: 2,
+    prereq: [], category: 'defense', controlRadius: 2, isoHeight: 12,
     bonus: 'Basic barrier. 300 HP.',
   },
   field_ops: {
     label: 'Field Ops', faction: 'player',
     hp: 220, cost: 175, buildTime: 18, size: [2,2], sight: 0,
     color: '#4a6a8a', trainable: ['engineer','medic','sniper'], maxCount: 2, power: -2,
-    prereq: ['barracks'], category: 'production', controlRadius: 4,
+    prereq: ['barracks'], category: 'production', controlRadius: 4, isoHeight: 24,
     bonus: 'Trains Engineers, Medics & Snipers. Requires Barracks.',
   },
   motor_pool: {
     label: 'Motor Pool', faction: 'player',
     hp: 280, cost: 300, buildTime: 25, size: [2,2], sight: 0,
     color: '#7a6a22', trainable: ['apc','artillery','harvester'], maxCount: 1, power: -3,
-    prereq: ['barracks'], category: 'production', controlRadius: 4,
+    prereq: ['barracks'], category: 'production', controlRadius: 4, isoHeight: 28,
     bonus: 'Trains APCs, Artillery & Harvesters. Requires Barracks.',
   },
   defense_works: {
     label: 'Defense Works', faction: 'player',
     hp: 240, cost: 225, buildTime: 20, size: [2,2], sight: 0,
     color: '#4a6a44', trainable: ['anti_air'], maxCount: 2, power: -3,
-    prereq: ['motor_pool'], category: 'defense', controlRadius: 3,
+    prereq: ['motor_pool'], category: 'defense', controlRadius: 3, isoHeight: 22,
     bonus: 'Trains Anti-Air units. Requires Motor Pool.',
   },
   radar_station: {
     label: 'Radar Station', faction: 'player',
     hp: 160, cost: 200, buildTime: 15, size: [1,2], sight: 12,
     color: '#2a8a8a', trainable: [], maxCount: 2, power: -4,
-    prereq: ['field_ops'], category: 'advanced', controlRadius: 3,
+    prereq: ['field_ops'], category: 'advanced', controlRadius: 3, isoHeight: 30,
     bonus: 'Sight 12 tiles. Periodic enemy ping. Requires Field Ops.',
   },
   bunker: {
     label: 'Bunker', faction: 'player',
     hp: 500, cost: 120, buildTime: 12, size: [1,1], sight: 0,
     color: '#5a6a5a', trainable: [], maxCount: 6, power: 0,
-    prereq: [], category: 'defense', controlRadius: 2,
+    prereq: [], category: 'defense', controlRadius: 2, isoHeight: 14,
     bonus: 'High-HP defensive fortification. 6 max.',
   },
   supply_depot: {
     label: 'Supply Depot', faction: 'player',
     hp: 180, cost: 140, buildTime: 14, size: [1,2], sight: 0,
     color: '#8a7a3a', trainable: [], maxCount: 2, power: 0,
-    prereq: ['barracks'], category: 'base', controlRadius: 3,
+    prereq: ['barracks'], category: 'base', controlRadius: 3, isoHeight: 18,
     bonus: 'Units cost -10% IC. Passive +1 IC/sec. Requires Barracks.',
   },
   comms_tower: {
     label: 'Comms Tower', faction: 'player',
     hp: 120, cost: 160, buildTime: 12, size: [1,1], sight: 5,
     color: '#2a9a7a', trainable: [], maxCount: 3, power: -1,
-    prereq: ['field_ops'], category: 'advanced', controlRadius: 3,
+    prereq: ['field_ops'], category: 'advanced', controlRadius: 3, isoHeight: 44,
     bonus: 'All units +1 sight globally. Enemy spotted alert. Requires Field Ops.',
   },
   hospital: {
     label: 'Hospital', faction: 'player',
     hp: 200, cost: 180, buildTime: 16, size: [2,1], sight: 0,
     color: '#cc3355', trainable: [], maxCount: 2, power: -2,
-    prereq: ['field_ops'], category: 'advanced', controlRadius: 3,
+    prereq: ['field_ops'], category: 'advanced', controlRadius: 3, isoHeight: 22,
     bonus: 'Regenerates nearby units +1 HP/sec (radius 5 tiles). Requires Field Ops.',
   },
   forward_post: {
     label: 'Forward Post', faction: 'player',
     hp: 150, cost: 100, buildTime: 10, size: [1,1], sight: 4,
     color: '#4a5a6a', trainable: [], maxCount: 3, forwardPost: true, power: 0,
-    prereq: ['barracks'], category: 'base', controlRadius: 5,
+    prereq: ['barracks'], category: 'base', controlRadius: 5, isoHeight: 16,
     bonus: 'Place in any revealed territory. Rally point. Expands territory. Requires Barracks.',
   },
   fortified_wall: {
     label: 'Fortified Wall', faction: 'player',
     hp: 600, cost: 50, buildTime: 8, size: [1,1], sight: 0,
     color: '#8a8a8a', trainable: [], maxCount: Infinity, power: 0,
-    prereq: [], category: 'defense', controlRadius: 2,
+    prereq: [], category: 'defense', controlRadius: 2, isoHeight: 14,
     bonus: 'Heavy barrier. 600 HP.',
   },
   power_plant: {
     label: 'Power Plant', faction: 'player',
     hp: 200, cost: 150, buildTime: 12, size: [1,2], sight: 0,
     color: '#ccaa22', trainable: [], maxCount: 4, power: +8,
-    prereq: [], category: 'base', controlRadius: 3,
+    prereq: [], category: 'base', controlRadius: 3, isoHeight: 32,
     bonus: '+8 power. Required to run advanced buildings.',
   },
   // --- Enemy (Veil) — Soviet red palette ---
   veil_command: {
     label: 'Veil Command Base', faction: 'enemy',
     hp: 600, cost: 0, buildTime: 0, size: [2,2], sight: 0,
-    color: '#aa1a1a', trainable: [],
+    color: '#aa1a1a', trainable: [], isoHeight: 36,
   },
   veil_barracks: {
     label: 'Veil Barracks', faction: 'enemy',
     hp: 300, cost: 0, buildTime: 0, size: [2,2], sight: 0,
-    color: '#881a1a', trainable: ['veil_soldier','veil_raider'],
+    color: '#881a1a', trainable: ['veil_soldier','veil_raider'], isoHeight: 24,
   },
   tunnel_entrance: {
     label: 'Tunnel Entrance', faction: 'enemy',
     hp: 180, cost: 0, buildTime: 0, size: [1,1], sight: 0,
-    color: '#4a2a0a', trainable: ['infiltrator'],
+    color: '#4a2a0a', trainable: ['infiltrator'], isoHeight: 14,
   },
   rocket_platform: {
     label: 'Rocket Platform', faction: 'enemy',
     hp: 220, cost: 0, buildTime: 0, size: [1,1], sight: 0,
-    color: '#6a3a18', trainable: [],
+    color: '#6a3a18', trainable: [], isoHeight: 28,
   },
   armory: {
     label: 'Armory', faction: 'enemy',
     hp: 250, cost: 0, buildTime: 0, size: [1,1], sight: 0,
-    color: '#882222', trainable: ['veil_heavy','veil_artillery'],
+    color: '#882222', trainable: ['veil_heavy','veil_artillery'], isoHeight: 18,
   },
   veil_watch_post: {
     label: 'Veil Watch Post', faction: 'enemy',
     hp: 150, cost: 0, buildTime: 0, size: [1,1], sight: 6,
-    color: '#772232', trainable: ['veil_scout','veil_sniper'],
+    color: '#772232', trainable: ['veil_scout','veil_sniper'], isoHeight: 30,
   },
   veil_workshop: {
     label: 'Veil Workshop', faction: 'enemy',
     hp: 200, cost: 0, buildTime: 0, size: [1,1], sight: 0,
-    color: '#6a2a18', trainable: ['veil_engineer'],
+    color: '#6a2a18', trainable: ['veil_engineer'], isoHeight: 18,
   },
   veil_depot: {
     label: 'Veil Depot', faction: 'enemy',
     hp: 220, cost: 0, buildTime: 0, size: [1,2], sight: 0,
-    color: '#8a2a18', trainable: ['veil_bomber','veil_truck'],
+    color: '#8a2a18', trainable: ['veil_bomber','veil_truck'], isoHeight: 20,
   },
   veil_airbase: {
     label: 'Veil Airbase', faction: 'enemy',
     hp: 200, cost: 0, buildTime: 0, size: [2,2], sight: 0,
-    color: '#6a2233', trainable: ['veil_drone'],
+    color: '#6a2233', trainable: ['veil_drone'], isoHeight: 22,
   },
   veil_foundry: {
     label: 'Veil Foundry', faction: 'enemy',
     hp: 280, cost: 0, buildTime: 0, size: [2,2], sight: 0,
-    color: '#7a1a0a', trainable: ['veil_tank'],
+    color: '#7a1a0a', trainable: ['veil_tank'], isoHeight: 28,
   },
   veil_bunker: {
     label: 'Veil Bunker', faction: 'enemy',
     hp: 450, cost: 0, buildTime: 0, size: [1,1], sight: 0,
-    color: '#4a2a2a', trainable: [],
+    color: '#4a2a2a', trainable: [], isoHeight: 14,
   },
   veil_wall: {
     label: 'Veil Wall', faction: 'enemy',
     hp: 250, cost: 0, buildTime: 0, size: [1,1], sight: 0,
-    color: '#5a3333', trainable: [],
+    color: '#5a3333', trainable: [], isoHeight: 12,
   },
   veil_hospital: {
     label: 'Veil Field Hospital', faction: 'enemy',
     hp: 180, cost: 0, buildTime: 0, size: [1,2], sight: 0,
-    color: '#882233', trainable: [],
+    color: '#882233', trainable: [], isoHeight: 22,
   },
   veil_radar: {
     label: 'Veil Radar', faction: 'enemy',
     hp: 160, cost: 0, buildTime: 0, size: [1,1], sight: 10,
-    color: '#6a2244', trainable: [],
+    color: '#6a2244', trainable: [], isoHeight: 30,
   },
   veil_fort: {
     label: 'Veil Fortress', faction: 'enemy',
     hp: 500, cost: 0, buildTime: 0, size: [2,2], sight: 0,
-    color: '#5a0a0a', trainable: [],
+    color: '#5a0a0a', trainable: [], isoHeight: 36,
   },
   // --- Neutral ---
   settlement: {
     label: 'Settlement', faction: 'neutral',
     hp: 300, cost: 0, buildTime: 0, size: [2,2], sight: 0,
-    color: '#88cc88', trainable: [],
+    color: '#88cc88', trainable: [], isoHeight: 20,
   },
   intel_cache: {
     label: 'Intel Cache', faction: 'neutral',
     hp: 60, cost: 0, buildTime: 0, size: [1,1], sight: 0,
-    color: '#4488cc', trainable: [], icCapacity: 300, icRemaining: 300,
+    color: '#4488cc', trainable: [], icCapacity: 300, icRemaining: 300, isoHeight: 12,
     isResource: true,
   },
 };

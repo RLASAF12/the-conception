@@ -469,19 +469,14 @@ const UI = (() => {
   };
 
   function showPlacementCursor(col, row, w, h, valid) {
-    const x = col * TILE;
-    const y = row * TILE;
-    placementCursor.style.display = 'block';
-    placementCursor.style.left = x + 'px';
-    placementCursor.style.top  = y + 'px';
-    placementCursor.style.width  = (w * TILE) + 'px';
-    placementCursor.style.height = (h * TILE) + 'px';
-    placementCursor.style.borderColor = valid ? 'rgba(100,200,100,0.8)' : 'rgba(200,60,60,0.8)';
-    placementCursor.style.background  = valid ? 'rgba(100,200,100,0.12)' : 'rgba(200,60,60,0.12)';
+    // Store placement data for canvas-based iso rendering
+    placementCursor.style.display = 'none'; // hide DOM cursor — draw on canvas instead
+    window._placementCursor = { col, row, w, h, valid };
   }
 
   function hidePlacementCursor() {
     placementCursor.style.display = 'none';
+    window._placementCursor = null;
   }
 
   function resetVoice() {
