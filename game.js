@@ -5,7 +5,43 @@
 const TICK_RATE = 1 / 60;
 const ATTACK_COOLDOWN = 0.5; // seconds between attacks
 
-// Settlement names & populations
+// ---- Mission definitions ----
+const MISSION_DATA = [
+  {
+    id: 1,
+    title: 'Operation Veil',
+    subtitle: 'Hold the settlements. Destroy the enemy command.',
+    desc: 'Three civilian settlements stand between you and the Veil. Keep them alive while you push west to eliminate the Command Base.',
+    settlements: [
+      { col: 17, row: 7,  name: 'Kerem',  pop: 1200 },
+      { col: 19, row: 19, name: 'Havela', pop: 800  },
+      { col: 23, row: 13, name: 'Misgav', pop: 950  },
+    ],
+    playerBase: { col: 35, row: 14 },
+    enemyBase: { col: 3, row: 13 },
+    startIc: 200,
+    waveInterval: 90,
+  },
+  {
+    id: 2,
+    title: 'Operation Spectre',
+    subtitle: 'Urban corridor. No room to maneuver.',
+    desc: 'The Veil controls a fortified urban corridor. Enemy forces are denser and waves come faster. Infiltrators spawn earlier. Protect the supply lines at all costs.',
+    settlements: [
+      { col: 25, row: 5,  name: 'Arvat',   pop: 600  },
+      { col: 21, row: 14, name: 'Dekel',   pop: 1100 },
+      { col: 26, row: 22, name: 'Tsipori', pop: 750  },
+    ],
+    playerBase: { col: 34, row: 14 },
+    enemyBase: { col: 2, row: 14 },
+    startIc: 150,        // less starting IC
+    waveInterval: 65,    // faster waves
+  },
+];
+
+let _currentMission = MISSION_DATA[0]; // default mission 1
+
+// Settlement names & populations — resolved from active mission at game start
 const SETTLEMENT_DATA = [
   { col: 17, row: 7,  name: 'Kerem',   pop: 1200 },
   { col: 19, row: 19, name: 'Havela',  pop: 800  },
@@ -28,49 +64,69 @@ function createGameState() {
   const buildings = [];
   const units = [];
 
-  // Player Command Base at col 35, row 14 (center)
-  const cb = createBuilding('command_base', 35, 14, 'player');
+  const missionDef = _currentMission;
+
+  // Player Command Base
+  const pbCol = missionDef.playerBase.col, pbRow = missionDef.playerBase.row;
+  const cb = createBuilding('command_base', pbCol, pbRow, 'player');
   cb.buildProgress = 1;
-  _markGrid(grid, 35, 14, 2, 2, 1);
+  _markGrid(grid, pbCol, pbRow, 2, 2, 1);
   buildings.push(cb);
 
-  // Enemy Command Base (hidden, col 3, row 13)
-  const ecb = createBuilding('veil_command', 3, 13, 'enemy');
+  // Enemy Command Base (hidden)
+  const ebCol = missionDef.enemyBase.col, ebRow = missionDef.enemyBase.row;
+  const ecb = createBuilding('veil_command', ebCol, ebRow, 'enemy');
   ecb.buildProgress = 1;
-  _markGrid(grid, 3, 13, 2, 2, 1);
+  _markGrid(grid, ebCol, ebRow, 2, 2, 1);
   buildings.push(ecb);
 
-  // Enemy initial barracks
-  const eb1 = createBuilding('veil_barracks', 6, 10, 'enemy');
+  // Enemy initial barracks (near enemy base)
+  const ebc1 = Math.min(ebCol + 3, 11), ebr1 = Math.max(ebRow - 3, 2);
+  const eb1 = createBuilding('veil_barracks', ebc1, ebr1, 'enemy');
   eb1.buildProgress = 1;
-  _markGrid(grid, 6, 10, 2, 2, 1);
+  _markGrid(grid, ebc1, ebr1, 2, 2, 1);
   eb1.trainTimer = 10;
   buildings.push(eb1);
 
   // Enemy initial watch post
-  const ewp = createBuilding('veil_watch_post', 8, 4, 'enemy');
+  const ewpc = Math.min(ebCol + 5, 13), ewpr = Math.max(2, ebRow - 10);
+  const ewp = createBuilding('veil_watch_post', ewpc, ewpr, 'enemy');
   ewp.buildProgress = 1;
-  _markGrid(grid, 8, 4, 1, 1, 1);
+  _markGrid(grid, ewpc, ewpr, 1, 1, 1);
   ewp.trainTimer = 12;
   buildings.push(ewp);
 
   // Enemy initial radar
-  const erad = createBuilding('veil_radar', 5, 17, 'enemy');
+  const eradc = Math.min(ebCol + 2, 10), eradr = Math.min(ebRow + 4, ROWS - 2);
+  const erad = createBuilding('veil_radar', eradc, eradr, 'enemy');
   erad.buildProgress = 1;
-  _markGrid(grid, 5, 17, 1, 1, 1);
+  _markGrid(grid, eradc, eradr, 1, 1, 1);
   buildings.push(erad);
 
-  // Neutral settlements
-  for (const sd of SETTLEMENT_DATA) {
+  // Neutral settlements — from mission definition
+  for (const sd of missionDef.settlements) {
     const s = createSettlement(sd.col, sd.row, sd.name, sd.pop);
     s.buildProgress = 1;
     _markGrid(grid, sd.col, sd.row, 2, 2, 1);
     buildings.push(s);
   }
 
+  // Intel caches: scattered resource nodes across neutral/enemy zones
+  const INTEL_CACHE_SPOTS = [
+    [18,  5], [22, 10], [20, 20], [24, 25],  // neutral zone
+    [14, 17], [16,  3], [25, 14],             // closer to river / deep neutral
+  ];
+  for (const [ic_col, ic_row] of INTEL_CACHE_SPOTS) {
+    const ic = createBuilding('intel_cache', ic_col, ic_row, 'neutral');
+    ic.buildProgress = 1;
+    ic.icRemaining = 300;
+    _markGrid(grid, ic_col, ic_row, 1, 1, 0); // passable — harvesters walk onto it
+    buildings.push(ic);
+  }
+
   // Player starting units: 3 soldiers near command base
   for (let i = 0; i < 3; i++) {
-    units.push(createUnit('soldier', 33 + i, 15, 'player'));
+    units.push(createUnit('soldier', pbCol - 2 + i, pbRow + 1, 'player'));
   }
 
   // ---- Terrain enrichment precomputation ----
@@ -82,10 +138,10 @@ function createGameState() {
     for (let c = 27; c < COLS; c++)
       fogLit[r * COLS + c] = 1;
 
-  // Zone base colors [R, G, B]
-  const _DIRT = [58, 48, 32];
-  const _NEUT = [34, 46, 20];
-  const _GRAS = [42, 58, 26];
+  // Zone base colors [R, G, B] — Red Alert military palette
+  const _DIRT = [78, 58, 32];   // enemy zone: warm barren brown
+  const _NEUT = [52, 78, 24];   // neutral: vibrant olive
+  const _GRAS = [48, 92, 22];   // player zone: bright military green
   function _lerp3(a, b, t) {
     return [Math.round(a[0]+(b[0]-a[0])*t), Math.round(a[1]+(b[1]-a[1])*t), Math.round(a[2]+(b[2]-a[2])*t)];
   }
@@ -169,10 +225,13 @@ function createGameState() {
   }
 
   return {
-    ic: 200,
+    ic: missionDef.startIc,
     elapsedTime: 0,
     fog, fogOpacity, fogLit, grid, buildings, units,
     tileColors, roads, features, riverTiles,
+    particles: [],
+    projectiles: [],
+    powerLevel: 0,
     selected: [],
     settlementsFallen: 0,
     gameState: 'playing', // playing | paused | win | lose
@@ -241,7 +300,38 @@ function _invalidatePathCache(G) {
 }
 
 // ============================================================
-// RENDERER
+// VISUAL HELPERS — Red Alert style rendering utilities
+// ============================================================
+
+// Get unit facing angle from its path
+function _getFacing(u) {
+  if (u.path && u.path.length > 0) {
+    const next = u.path[0];
+    return Math.atan2(next.row + 0.5 - u.row, next.col + 0.5 - u.col);
+  }
+  return 0;
+}
+
+// Darken a #rrggbb hex color by factor (0..1)
+function _darken(hex, factor) {
+  if (!hex || hex[0] !== '#' || hex.length < 7) return hex;
+  const r = parseInt(hex.slice(1,3), 16);
+  const g = parseInt(hex.slice(3,5), 16);
+  const b = parseInt(hex.slice(5,7), 16);
+  return `rgb(${Math.max(0,Math.round(r*factor))},${Math.max(0,Math.round(g*factor))},${Math.max(0,Math.round(b*factor))})`;
+}
+
+// Lighten a #rrggbb hex color by factor (0..1)
+function _lighten(hex, factor) {
+  if (!hex || hex[0] !== '#' || hex.length < 7) return hex;
+  const r = parseInt(hex.slice(1,3), 16);
+  const g = parseInt(hex.slice(3,5), 16);
+  const b = parseInt(hex.slice(5,7), 16);
+  return `rgb(${Math.min(255,Math.round(r+(255-r)*factor))},${Math.min(255,Math.round(g+(255-g)*factor))},${Math.min(255,Math.round(b+(255-b)*factor))})`;
+}
+
+// ============================================================
+// RENDERER — Red Alert Style Visual Engine
 // ============================================================
 class Renderer {
   constructor(canvas, minimapCanvas) {
@@ -249,92 +339,133 @@ class Renderer {
     this.mctx = minimapCanvas.getContext('2d');
     this.mW = minimapCanvas.width;
     this.mH = minimapCanvas.height;
+    this._frame = 0;
   }
 
   drawFrame(G) {
     const ctx = this.ctx;
     ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
-
+    this._frame++;
     this._drawTerrain(ctx, G);
     this._drawBuildings(ctx, G);
     this._drawUnits(ctx, G);
+    this._drawProjectiles(ctx, G);
+    this._drawParticles(ctx, G);
     this._drawFog(ctx, G);
     this._drawSelectionHighlights(ctx, G);
     this._drawHpBars(ctx, G);
-
     this._drawMinimap(G);
   }
 
+  // ─── TERRAIN ────────────────────────────────────────────────
   _drawTerrain(ctx, G) {
     for (let r = 0; r < ROWS; r++) {
       for (let c = 0; c < COLS; c++) {
         const idx = r * COLS + c;
         const x = c * TILE, y = r * TILE;
+        const isRiver = G.riverTiles.has(idx);
+        const isBridge = isRiver && (r === 13 || r === 14);
+        const isRoad = G.roads.has(idx);
 
-        // Base tile color (precomputed with noise + zone transitions)
-        if (G.riverTiles.has(idx)) {
-          const isBridge = (r === 13 || r === 14);
-          ctx.fillStyle = isBridge ? '#5a4a30' : '#1a2a3a';
-        } else if (G.roads.has(idx)) {
-          // Roads: slightly lighter/more tan version of zone color
-          const base = G.tileColors[idx];
-          ctx.fillStyle = base; // draw base first, then lighten below
+        if (isRiver && !isBridge) {
+          // Water — deep military blue with ripple lines
+          ctx.fillStyle = '#1c3a5a';
           ctx.fillRect(x, y, TILE, TILE);
-          ctx.fillStyle = 'rgba(200,160,90,0.22)';
+          ctx.strokeStyle = 'rgba(70,130,200,0.28)';
+          ctx.lineWidth = 1;
+          const rippleOff = (this._frame * 0.18 + c * 1.3) % TILE;
+          for (let rl = 0; rl < TILE; rl += 9) {
+            const yy = y + ((rl + rippleOff) % TILE);
+            ctx.beginPath(); ctx.moveTo(x + 2, yy); ctx.lineTo(x + TILE - 4, yy); ctx.stroke();
+          }
+        } else if (isBridge) {
+          // Wooden bridge planks
+          ctx.fillStyle = '#6a5030';
+          ctx.fillRect(x, y, TILE, TILE);
+          ctx.fillStyle = '#7a5a38';
+          for (let pl = 1; pl < TILE - 1; pl += 6) {
+            ctx.fillRect(x + 1, y + pl, TILE - 2, 4);
+          }
+          ctx.fillStyle = 'rgba(0,0,0,0.35)';
+          ctx.fillRect(x, y, 3, TILE);
+          ctx.fillRect(x + TILE - 3, y, 3, TILE);
         } else {
           ctx.fillStyle = G.tileColors[idx];
-        }
-        ctx.fillRect(x, y, TILE, TILE);
-
-        // Road overlay (already handled above for road base, add road center strip)
-        if (G.roads.has(idx) && !G.riverTiles.has(idx)) {
-          ctx.fillStyle = 'rgba(160,120,60,0.18)';
-          ctx.fillRect(x + 10, y + 10, TILE - 20, TILE - 20);
-        }
-
-        // Bridge planks
-        if (G.riverTiles.has(idx) && (r === 13 || r === 14)) {
-          ctx.fillStyle = 'rgba(90,70,40,0.5)';
-          ctx.fillRect(x + 3, y + 3, TILE - 6, TILE - 6);
-          // planks
-          ctx.fillStyle = 'rgba(120,90,50,0.4)';
-          for (let pl = 4; pl < TILE - 4; pl += 6) {
-            ctx.fillRect(x + 3, y + pl, TILE - 6, 3);
+          ctx.fillRect(x, y, TILE, TILE);
+          if (isRoad) {
+            // Dirt road — tan overlay + edge shadows
+            ctx.fillStyle = 'rgba(160,120,55,0.32)';
+            ctx.fillRect(x, y, TILE, TILE);
+            ctx.fillStyle = 'rgba(60,42,15,0.22)';
+            ctx.fillRect(x, y, 3, TILE);
+            ctx.fillRect(x + TILE - 3, y, 3, TILE);
           }
         }
 
         // Decorative features
         const feat = G.features[idx];
         if (feat === 1) {
-          // Tree: two small triangles
-          ctx.fillStyle = 'rgba(20,50,15,0.75)';
-          const tx = x + 8, ty = y + 18;
-          ctx.beginPath(); ctx.moveTo(tx, ty - 10); ctx.lineTo(tx - 5, ty); ctx.lineTo(tx + 5, ty); ctx.closePath(); ctx.fill();
-          const tx2 = x + 22, ty2 = y + 20;
-          ctx.beginPath(); ctx.moveTo(tx2, ty2 - 9); ctx.lineTo(tx2 - 4, ty2); ctx.lineTo(tx2 + 4, ty2); ctx.closePath(); ctx.fill();
+          // Trees — round canopy with trunk + shadow
+          const drawTree = (tx, ty, sz) => {
+            ctx.fillStyle = 'rgba(0,0,0,0.22)';
+            ctx.beginPath(); ctx.ellipse(tx + 2, ty + 2, sz + 2, sz - 1, 0, 0, Math.PI * 2); ctx.fill();
+            ctx.fillStyle = '#5a3810';
+            ctx.fillRect(tx - 1, ty - 2, 2, sz - 1);
+            ctx.fillStyle = '#254a0e';
+            ctx.beginPath(); ctx.arc(tx, ty - sz + 2, sz, 0, Math.PI * 2); ctx.fill();
+            ctx.fillStyle = '#326614';
+            ctx.beginPath(); ctx.arc(tx - 1, ty - sz, sz - 2, 0, Math.PI * 2); ctx.fill();
+            ctx.fillStyle = '#3d7a18';
+            ctx.beginPath(); ctx.arc(tx - 1, ty - sz - 1, sz - 4, 0, Math.PI * 2); ctx.fill();
+          };
+          drawTree(x + 9, y + 20, 7);
+          drawTree(x + 22, y + 17, 6);
         } else if (feat === 2) {
-          // Rock: two small gray rectangles
-          ctx.fillStyle = 'rgba(80,75,70,0.7)';
-          ctx.fillRect(x + 7, y + 16, 7, 5);
-          ctx.fillRect(x + 18, y + 14, 5, 6);
+          // Rocks — 3D polygon outcropping with highlight
+          ctx.fillStyle = 'rgba(0,0,0,0.28)';
+          ctx.beginPath(); ctx.ellipse(x + 18, y + 22, 9, 4, 0, 0, Math.PI * 2); ctx.fill();
+          ctx.fillStyle = '#6a6458';
+          ctx.beginPath();
+          ctx.moveTo(x + 8,y+20); ctx.lineTo(x+12,y+11); ctx.lineTo(x+20,y+10);
+          ctx.lineTo(x+25,y+18); ctx.lineTo(x+19,y+22); ctx.closePath(); ctx.fill();
+          ctx.fillStyle = '#8a8478';
+          ctx.beginPath();
+          ctx.moveTo(x+11,y+14); ctx.lineTo(x+15,y+12); ctx.lineTo(x+18,y+15);
+          ctx.lineTo(x+14,y+18); ctx.closePath(); ctx.fill();
+          ctx.fillStyle = '#585048';
+          ctx.beginPath();
+          ctx.moveTo(x+20,y+20); ctx.lineTo(x+24,y+16); ctx.lineTo(x+27,y+17);
+          ctx.lineTo(x+26,y+22); ctx.closePath(); ctx.fill();
         } else if (feat === 3) {
-          // Ruin: crumbled rectangle outline + some fragments
-          ctx.strokeStyle = 'rgba(70,60,50,0.65)';
-          ctx.lineWidth = 1.5;
-          ctx.strokeRect(x + 6, y + 8, 12, 14);
-          ctx.fillStyle = 'rgba(60,50,40,0.5)';
-          ctx.fillRect(x + 6, y + 8, 4, 4);
-          ctx.fillRect(x + 14, y + 18, 4, 4);
+          // Ruins — destroyed building foundation with rubble
+          ctx.fillStyle = 'rgba(0,0,0,0.32)';
+          ctx.fillRect(x + 5, y + 7, 22, 18);
+          ctx.fillStyle = '#4a3a2a';
+          ctx.fillRect(x + 6, y + 8, 20, 16);
+          ctx.fillStyle = '#6a5a48';
+          ctx.fillRect(x + 6, y + 8, 4, 12);
+          ctx.fillRect(x + 18, y + 8, 3, 8);
+          ctx.fillRect(x + 6, y + 8, 16, 3);
+          ctx.fillStyle = '#5a4a38';
+          ctx.fillRect(x + 12, y + 16, 5, 4);
+          ctx.fillRect(x + 20, y + 12, 4, 4);
+          ctx.strokeStyle = 'rgba(25,16,10,0.65)';
+          ctx.lineWidth = 0.8;
+          ctx.beginPath();
+          ctx.moveTo(x+8,y+10); ctx.lineTo(x+14,y+16);
+          ctx.moveTo(x+20,y+9); ctx.lineTo(x+16,y+14);
+          ctx.stroke();
         }
 
-        // Subtle grid lines
-        ctx.strokeStyle = 'rgba(0,0,0,0.1)';
+        // Very subtle grid
+        ctx.strokeStyle = 'rgba(0,0,0,0.055)';
         ctx.lineWidth = 0.5;
         ctx.strokeRect(x, y, TILE, TILE);
       }
     }
   }
 
+  // ─── BUILDINGS ──────────────────────────────────────────────
   _drawBuildings(ctx, G) {
     for (const b of G.buildings) {
       if (b.dead) continue;
@@ -342,116 +473,856 @@ class Renderer {
       const visible = b.faction === 'player' || G.fog[fogIdx] === 1;
       if (!visible) continue;
 
-      const def = BUILDING_DEF[b.type];
       const x = b.col * TILE, y = b.row * TILE;
       const pw = b.w * TILE, ph = b.h * TILE;
 
-      // building body
-      ctx.fillStyle = def.color;
-      ctx.globalAlpha = b.buildProgress < 1 ? 0.4 + b.buildProgress * 0.6 : 1;
-      ctx.fillRect(x + 2, y + 2, pw - 4, ph - 4);
+      ctx.globalAlpha = b.buildProgress < 1 ? 0.35 + b.buildProgress * 0.65 : 1;
+      this._drawBuildingShape(ctx, b.type, b.faction, x, y, pw, ph);
       ctx.globalAlpha = 1;
 
-      // border
-      ctx.strokeStyle = b.faction === 'player' ? '#88bbff' :
-                        b.faction === 'enemy'  ? '#ffaaaa' : '#aaccaa';
-      ctx.lineWidth = 1.5;
-      ctx.strokeRect(x + 2, y + 2, pw - 4, ph - 4);
-
-      // label
-      if (G.fog[Math.floor(b.row) * COLS + Math.floor(b.col)] === 1) {
-        ctx.fillStyle = '#fff';
-        ctx.font = '8px Courier New';
-        ctx.textAlign = 'center';
-        const shortLabel = def.label.substring(0, 6);
-        ctx.fillText(shortLabel, x + pw / 2, y + ph / 2 + 3);
-      }
-
-      // building progress bar
+      // Build progress bar
       if (b.buildProgress < 1) {
-        ctx.fillStyle = '#333';
+        ctx.fillStyle = '#1a1a1a';
         ctx.fillRect(x + 2, y + ph - 6, pw - 4, 4);
-        ctx.fillStyle = '#4aff4a';
+        ctx.fillStyle = '#44cc22';
         ctx.fillRect(x + 2, y + ph - 6, (pw - 4) * b.buildProgress, 4);
       }
-
-      // train progress for selected buildings
+      // Train progress bar
       if (b.trainQueue && b.trainQueue.length > 0 && b.trainTimer > 0) {
         const uDef = UNIT_DEF[b.trainQueue[0]];
         if (uDef) {
           const prog = 1 - b.trainTimer / uDef.buildTime;
-          ctx.fillStyle = '#222';
+          ctx.fillStyle = '#1a1a1a';
           ctx.fillRect(x + 2, y + 2, pw - 4, 4);
-          ctx.fillStyle = '#4a9eff';
+          ctx.fillStyle = '#4488ff';
           ctx.fillRect(x + 2, y + 2, (pw - 4) * Math.max(0, Math.min(1, prog)), 4);
         }
+      }
+
+      // Rally point flag marker on the building
+      if (b.rallyPoint) {
+        const rpx = b.rallyPoint.col * TILE + TILE / 2;
+        const rpy = b.rallyPoint.row * TILE + TILE / 2;
+        // Draw dashed line from building center to rally point
+        ctx.save();
+        ctx.strokeStyle = 'rgba(68,255,68,0.55)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([3, 3]);
+        ctx.beginPath();
+        ctx.moveTo(x + pw / 2, y + ph / 2);
+        ctx.lineTo(rpx, rpy);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        // Flag icon at rally point
+        ctx.fillStyle = '#44ff44';
+        ctx.beginPath();
+        ctx.arc(rpx, rpy, 4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = '#22aa22';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(rpx, rpy, 4, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
       }
     }
   }
 
+  _drawBuildingShape(ctx, type, faction, x, y, pw, ph) {
+    const isEnemy  = faction === 'enemy';
+    const isNeutral = faction === 'neutral';
+    const def = BUILDING_DEF[type];
+    const mc  = def ? def.color : '#888888';
+    const dk  = _darken(mc, 0.5);
+    const lt  = _lighten(mc, 0.38);
+    const border = isEnemy ? '#cc3333' : isNeutral ? '#88aa88' : '#4499cc';
+
+    const fill = (c, rx, ry, rw, rh) => { ctx.fillStyle = c; ctx.fillRect(rx,ry,rw,rh); };
+    const stroke = (c, lw, rx, ry, rw, rh) => {
+      ctx.strokeStyle = c; ctx.lineWidth = lw; ctx.strokeRect(rx,ry,rw,rh);
+    };
+    const outline = () => stroke(border, 1.8, x+2,y+2,pw-4,ph-4);
+
+    switch (type) {
+      /* ── COMMAND BASE ── */
+      case 'command_base': {
+        fill(mc, x+3,y+3,pw-6,ph-6);
+        fill(lt, x+8,y+3,pw-16,ph/2-4);
+        // windows
+        ctx.fillStyle = 'rgba(150,210,255,0.7)';
+        for (let i=0;i<3;i++) ctx.fillRect(x+10+i*14, y+ph/2, 8, 5);
+        // central tower
+        fill(dk, x+pw/2-6,y+2,12,ph-4);
+        fill(lt, x+pw/2-4,y+4,8,6);
+        // antenna mast
+        ctx.strokeStyle = '#bbbbcc'; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.moveTo(x+pw/2,y+2); ctx.lineTo(x+pw/2,y-11); ctx.stroke();
+        ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(x+pw/2-7,y-8); ctx.lineTo(x+pw/2+7,y-8); ctx.stroke();
+        // satellite dish
+        ctx.strokeStyle = '#88aacc'; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.arc(x+pw-10,y+9,6,Math.PI*0.75,Math.PI*1.85); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(x+pw-10,y+15); ctx.lineTo(x+pw-10,y+9); ctx.stroke();
+        outline(); break;
+      }
+      /* ── BARRACKS ── */
+      case 'barracks': case 'veil_barracks': {
+        fill(mc, x+3,y+3,pw-6,ph-6);
+        fill(dk, x+3,y+3,pw-6,6);
+        fill(lt, x+3,y+4,pw-6,3);
+        // windows
+        ctx.fillStyle = isEnemy ? '#220000' : '#334455';
+        for (let i=0;i<3;i++) {
+          ctx.fillRect(x+8+i*16, y+14, 8, 6);
+          ctx.fillRect(x+8+i*16, y+ph/2+6, 8, 6);
+        }
+        // door
+        fill('#111', x+pw/2-5,y+ph-12,10,10);
+        ctx.strokeStyle = '#555'; ctx.lineWidth = 0.8; ctx.strokeRect(x+pw/2-5,y+ph-12,10,10);
+        outline(); break;
+      }
+      /* ── WATCHTOWER ── */
+      case 'watchtower': case 'veil_watch_post': {
+        ctx.strokeStyle = isEnemy ? '#661111' : dk; ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(x+8,y+ph-2); ctx.lineTo(x+pw/2-1,y+8);
+        ctx.moveTo(x+pw-8,y+ph-2); ctx.lineTo(x+pw/2+1,y+8);
+        ctx.moveTo(x+4,y+ph/2); ctx.lineTo(x+pw/2,y+8);
+        ctx.moveTo(x+pw-4,y+ph/2); ctx.lineTo(x+pw/2,y+8);
+        ctx.stroke();
+        fill(mc, x+4,y+5,pw-8,13);
+        fill(lt, x+5,y+6,pw-10,5);
+        fill('#111', x+8,y+8,pw-16,3); // slit
+        const blink = (this._frame>>5)&1;
+        ctx.fillStyle = blink ? '#ffff44' : '#887700';
+        ctx.beginPath(); ctx.arc(x+pw/2,y+4,2.5,0,Math.PI*2); ctx.fill();
+        outline(); break;
+      }
+      /* ── BUNKER ── */
+      case 'bunker': case 'veil_bunker': {
+        fill(dk, x+4,y+8,pw-4,ph-6);
+        ctx.fillStyle = mc;
+        ctx.beginPath();
+        ctx.moveTo(x+3,y+ph-4); ctx.lineTo(x+2,y+10);
+        ctx.lineTo(x+6,y+6); ctx.lineTo(x+pw-6,y+6);
+        ctx.lineTo(x+pw-2,y+10); ctx.lineTo(x+pw-3,y+ph-4);
+        ctx.closePath(); ctx.fill();
+        ctx.fillStyle = lt;
+        ctx.beginPath();
+        ctx.moveTo(x+2,y+10); ctx.lineTo(x+6,y+6);
+        ctx.lineTo(x+pw-6,y+6); ctx.lineTo(x+pw-2,y+10);
+        ctx.closePath(); ctx.fill();
+        fill('#111', x+8,y+ph/2-1,pw-16,3); // gun slit
+        ctx.fillStyle = '#7a6a44';
+        for (let i=0;i<4;i++) {
+          ctx.beginPath(); ctx.ellipse(x+6+i*6,y+ph-3,3,2,0,0,Math.PI*2); ctx.fill();
+        }
+        outline(); break;
+      }
+      /* ── WALLS ── */
+      case 'wall': case 'fortified_wall': case 'veil_wall': {
+        fill(mc, x+1,y+1,pw-2,ph-2);
+        ctx.strokeStyle = dk; ctx.lineWidth = 0.6;
+        for (let bi=0;bi<Math.ceil(ph/5);bi++) {
+          const off = (bi%2===0)?0:8;
+          for (let bj=-1;bj<Math.ceil(pw/16)+1;bj++) {
+            ctx.strokeRect(x+off+bj*16, y+bi*5, 14, 4);
+          }
+        }
+        if (type==='fortified_wall') {
+          fill(lt, x+2,y+1,7,5); fill(lt, x+14,y+1,7,5);
+        }
+        stroke(border, 1.5, x+1,y+1,pw-2,ph-2); break;
+      }
+      /* ── MOTOR POOL ── */
+      case 'motor_pool': {
+        fill(mc, x+3,y+3,pw-6,ph-6);
+        fill(dk, x+3,y+3,pw-6,8);
+        fill(lt, x+4,y+4,pw-8,4);
+        fill('#1a1a1a', x+8,y+16,pw-16,ph-22); // bay door opening
+        ctx.strokeStyle = '#333'; ctx.lineWidth = 1;
+        for (let d=4;d<ph-22;d+=5) {
+          ctx.beginPath(); ctx.moveTo(x+8,y+16+d); ctx.lineTo(x+pw-8,y+16+d); ctx.stroke();
+        }
+        ctx.fillStyle = 'rgba(80,60,30,0.55)';
+        ctx.fillRect(x+14,y+24,pw-28,12);
+        outline(); break;
+      }
+      /* ── RADAR STATION ── */
+      case 'radar_station': case 'veil_radar': {
+        fill(mc, x+3,y+ph/2,pw-6,ph/2-3);
+        fill(lt, x+3,y+ph/2,pw-6,4);
+        fill(dk, x+pw/2-3,y+ph/2-5,6,ph/2-2);
+        // animated dish
+        const da = (this._frame*0.025)%(Math.PI*2);
+        ctx.strokeStyle = isEnemy ? '#cc4433' : '#33ccaa'; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(x+pw/2,y+ph/2-6,10,da,da+Math.PI); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(x+pw/2,y+ph/2-6);
+        ctx.lineTo(x+pw/2+Math.cos(da)*10, y+ph/2-6+Math.sin(da)*10); ctx.stroke();
+        const bl = (this._frame>>4)&1;
+        ctx.fillStyle = bl ? '#ff3333' : '#771111';
+        ctx.beginPath(); ctx.arc(x+pw-6,y+ph/2+5,2.5,0,Math.PI*2); ctx.fill();
+        outline(); break;
+      }
+      /* ── HOSPITAL ── */
+      case 'hospital': case 'veil_hospital': {
+        fill(mc, x+3,y+3,pw-6,ph-6);
+        fill(lt, x+3,y+3,pw-6,5);
+        const cx=x+pw/2, cy=y+ph/2;
+        ctx.fillStyle = isEnemy ? '#990000' : '#ee2222';
+        ctx.fillRect(cx-8,cy-3,16,6); ctx.fillRect(cx-3,cy-8,6,16);
+        ctx.fillStyle = 'rgba(180,220,255,0.5)';
+        ctx.fillRect(x+5,y+10,6,5); ctx.fillRect(x+pw-11,y+10,6,5);
+        outline(); break;
+      }
+      /* ── QUARRY ── */
+      case 'quarry': {
+        fill(mc, x+3,y+3,pw-6,ph-6);
+        fill(dk, x+5,y+8,pw-10,5);
+        fill('#886633', x+6,y+16,6,ph-20);
+        fill(lt, x+6,y+16,6,4);
+        fill('#5a4a3a', x+pw-12,y+2,5,10);
+        outline(); break;
+      }
+      /* ── FIELD OPS ── */
+      case 'field_ops': {
+        fill(mc, x+3,y+3,pw-6,ph-6);
+        fill(lt, x+3,y+3,pw-6,5);
+        fill('#2a3a2a', x+10,y+12,pw-20,ph/2-8);
+        ctx.strokeStyle = '#3a5a3a'; ctx.lineWidth = 0.5;
+        for (let gi=1;gi<3;gi++) {
+          ctx.beginPath(); ctx.moveTo(x+10+gi*(pw-20)/3,y+12); ctx.lineTo(x+10+gi*(pw-20)/3,y+ph/2+4); ctx.stroke();
+        }
+        ctx.fillStyle = '#aaccff';
+        ctx.fillRect(x+8,y+ph/2+2,8,6); ctx.fillRect(x+pw-16,y+ph/2+2,8,6);
+        outline(); break;
+      }
+      /* ── DEFENSE WORKS ── */
+      case 'defense_works': {
+        fill(mc, x+3,y+3,pw-6,ph-6);
+        fill(dk, x+3,y+3,5,ph-6); fill(dk, x+pw-8,y+3,5,ph-6);
+        fill(dk, x+3,y+3,pw-6,5); fill(dk, x+3,y+ph-8,pw-6,5);
+        ctx.strokeStyle = lt; ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(x+pw/2,y+ph/2); ctx.lineTo(x+pw/2-8,y+ph/2-14);
+        ctx.moveTo(x+pw/2,y+ph/2); ctx.lineTo(x+pw/2+8,y+ph/2-14);
+        ctx.stroke();
+        outline(); break;
+      }
+      /* ── COMMS TOWER ── */
+      case 'comms_tower': {
+        fill(mc, x+8,y+ph-10,pw-16,9);
+        fill(lt, x+pw/2-2,y+2,4,ph-12);
+        ctx.strokeStyle = mc; ctx.lineWidth = 2;
+        for (let ti=0;ti<3;ti++) {
+          const ty=y+ph*0.18+ti*(ph*0.2);
+          ctx.beginPath(); ctx.moveTo(x+pw/2-8+ti*2,ty); ctx.lineTo(x+pw/2+8-ti*2,ty); ctx.stroke();
+        }
+        const bl2=(this._frame>>5)&1;
+        ctx.fillStyle = bl2 ? '#ffff44' : '#888800';
+        ctx.beginPath(); ctx.arc(x+pw/2,y+3,2.5,0,Math.PI*2); ctx.fill();
+        outline(); break;
+      }
+      /* ── SUPPLY DEPOT ── */
+      case 'supply_depot': {
+        fill(mc, x+3,y+3,pw-6,ph-6);
+        fill('#7a6a3a', x+5,y+5,10,8); fill('#7a6a3a', x+17,y+5,8,8);
+        fill('#8a7a4a', x+5,y+5,10,4); fill('#8a7a4a', x+17,y+5,8,4);
+        ctx.strokeStyle = '#5a4a28'; ctx.lineWidth = 0.5;
+        ctx.strokeRect(x+5,y+5,10,8); ctx.strokeRect(x+17,y+5,8,8);
+        outline(); break;
+      }
+      /* ── FORWARD POST ── */
+      case 'forward_post': {
+        fill(mc, x+4,y+6,pw-8,ph-10);
+        ctx.fillStyle = '#7a6a44';
+        for (let i=0;i<5;i++) {
+          const a=(i/5)*Math.PI*2;
+          ctx.beginPath(); ctx.ellipse(x+pw/2+Math.cos(a)*9,y+ph/2+Math.sin(a)*7,4,3,a,0,Math.PI*2); ctx.fill();
+        }
+        fill(lt, x+pw/2-1,y+2,1,8);
+        fill('#4488ff', x+pw/2,y+2,6,4);
+        outline(); break;
+      }
+      /* ── SETTLEMENT ── */
+      case 'settlement': {
+        fill(mc, x+4,y+4,pw-8,ph-8);
+        fill('#5a7a48', x+6,y+6,20,14); fill('#6a8a5a', x+6,y+6,20,5);
+        fill('#4a6a38', x+30,y+12,14,18); fill('#5a7a48', x+30,y+12,14,5);
+        ctx.fillStyle='rgba(150,120,60,0.5)'; ctx.fillRect(x+26,y+10,4,22);
+        stroke('#88aa88', 1.5, x+3,y+3,pw-6,ph-6); break;
+      }
+      /* ── VEIL COMMAND ── */
+      case 'veil_command': {
+        fill(mc, x+3,y+3,pw-6,ph-6);
+        fill(dk, x+pw/2-7,y+2,14,ph-4);
+        fill('#cc2222', x+pw/2-5,y+4,10,8);
+        fill('#661111', x+pw/2-6,y+2,4,4);
+        fill('#661111', x+pw/2-1,y+2,4,4);
+        fill('#661111', x+pw/2+4,y+2,4,4);
+        // Soviet star
+        ctx.fillStyle='#ff3333';
+        const sx=x+pw/2, sy=y+ph/2+4;
+        for (let pi=0;pi<5;pi++) {
+          const a1=(pi*4*Math.PI/5)-Math.PI/2, a2=((pi*4+2)*Math.PI/5)-Math.PI/2;
+          ctx.beginPath(); ctx.moveTo(sx,sy);
+          ctx.lineTo(sx+Math.cos(a1)*7,sy+Math.sin(a1)*7);
+          ctx.lineTo(sx+Math.cos(a2)*7,sy+Math.sin(a2)*7);
+          ctx.closePath(); ctx.fill();
+        }
+        stroke('#ff4444', 2, x+2,y+2,pw-4,ph-4); break;
+      }
+      /* ── TUNNEL ENTRANCE ── */
+      case 'tunnel_entrance': {
+        fill('#2a2018', x+2,y+2,pw-4,ph-4);
+        fill('#1a1210', x+pw/2-10,y+ph/2-6,20,16);
+        ctx.beginPath(); ctx.ellipse(x+pw/2,y+ph/2+2,9,7,0,0,Math.PI*2);
+        ctx.fillStyle='#0a0806'; ctx.fill();
+        stroke('#553311', 1.5, x+2,y+2,pw-4,ph-4); break;
+      }
+      /* ── ROCKET PLATFORM ── */
+      case 'rocket_platform': {
+        fill('#443322', x+2,y+2,pw-4,ph-4);
+        ctx.fillStyle='#553322'; ctx.beginPath(); ctx.arc(x+pw/2,y+ph/2,10,0,Math.PI*2); ctx.fill();
+        fill('#cc3322', x+pw/2-2,y+4,4,14);
+        ctx.fillStyle='#cc3322';
+        ctx.beginPath(); ctx.moveTo(x+pw/2-2,y+4); ctx.lineTo(x+pw/2,y+1); ctx.lineTo(x+pw/2+2,y+4); ctx.fill();
+        stroke('#774422', 1.5, x+2,y+2,pw-4,ph-4); break;
+      }
+      /* ── ARMORY / WORKSHOP ── */
+      case 'armory': case 'veil_workshop': {
+        fill(mc, x+2,y+2,pw-4,ph-4);
+        ctx.strokeStyle='#cc4444'; ctx.lineWidth=1;
+        for (let ri=0;ri<3;ri++) {
+          ctx.beginPath(); ctx.moveTo(x+7+ri*7,y+6); ctx.lineTo(x+7+ri*7,y+22); ctx.stroke();
+        }
+        stroke('#cc3333', 1.5, x+2,y+2,pw-4,ph-4); break;
+      }
+      /* ── VEIL DEPOT ── */
+      case 'veil_depot': {
+        fill(mc, x+2,y+2,pw-4,ph-4);
+        fill(dk, x+2,y+2,pw-4,6);
+        for (let bi=0;bi<2;bi++) {
+          ctx.fillStyle='#774422';
+          ctx.beginPath(); ctx.arc(x+8+bi*10,y+ph/2+4,4,0,Math.PI*2); ctx.fill();
+          ctx.fillStyle='#993322';
+          ctx.beginPath(); ctx.arc(x+8+bi*10,y+ph/2+4,3,Math.PI,Math.PI*2); ctx.fill();
+        }
+        stroke(border, 1.5, x+2,y+2,pw-4,ph-4); break;
+      }
+      /* ── VEIL AIRBASE ── */
+      case 'veil_airbase': {
+        fill(mc, x+3,y+3,pw-6,ph-6);
+        fill('#2a2020', x+3,y+ph/2-3,pw-6,6);
+        ctx.fillStyle='#553333';
+        for (let ri=0;ri<4;ri++) ctx.fillRect(x+8+ri*14,y+ph/2-1,8,2);
+        stroke('#cc3344', 1.5, x+2,y+2,pw-4,ph-4); break;
+      }
+      /* ── VEIL FOUNDRY ── */
+      case 'veil_foundry': {
+        fill(mc, x+3,y+3,pw-6,ph-6);
+        fill('#5a3322', x+10,y+2,5,12); fill('#5a3322', x+pw-15,y+2,5,12);
+        ctx.fillStyle='rgba(255,90,15,0.45)';
+        ctx.beginPath(); ctx.arc(x+12,y+14,5,0,Math.PI*2); ctx.fill();
+        ctx.beginPath(); ctx.arc(x+pw-12,y+14,5,0,Math.PI*2); ctx.fill();
+        ctx.fillStyle='rgba(255,50,0,0.28)';
+        ctx.fillRect(x+16,y+20,pw-32,ph-26);
+        stroke('#aa2211', 1.5, x+2,y+2,pw-4,ph-4); break;
+      }
+      /* ── VEIL FORT ── */
+      case 'veil_fort': {
+        fill(mc, x+3,y+3,pw-6,ph-6);
+        fill(dk, x+3,y+3,10,10); fill(dk, x+pw-13,y+3,10,10);
+        fill(dk, x+3,y+ph-13,10,10); fill(dk, x+pw-13,y+ph-13,10,10);
+        fill('#551111', x+13,y+3,pw-26,5); fill('#551111', x+13,y+ph-8,pw-26,5);
+        fill('#551111', x+3,y+13,5,ph-26); fill('#551111', x+pw-8,y+13,5,ph-26);
+        stroke('#cc2222', 2, x+2,y+2,pw-4,ph-4); break;
+      }
+      /* ── INTEL CACHE ── */
+      case 'intel_cache': {
+        // Pulsing blue glow — crate full of intel
+        const pulse = 0.45 + 0.3 * Math.abs(Math.sin(this._frame * 0.05));
+        ctx.fillStyle = `rgba(30,80,180,${pulse})`;
+        ctx.beginPath(); ctx.arc(x+pw/2,y+ph/2,pw/2+2,0,Math.PI*2); ctx.fill();
+        fill('#1a3a6a', x+3,y+3,pw-6,ph-6);
+        fill('#2a5aaa', x+5,y+5,pw-10,7); // lid highlight
+        // stencil lines
+        ctx.strokeStyle='rgba(80,160,255,0.7)'; ctx.lineWidth=1;
+        ctx.beginPath(); ctx.moveTo(x+4,y+ph/2); ctx.lineTo(x+pw-4,y+ph/2); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(x+pw/2,y+4); ctx.lineTo(x+pw/2,y+ph-4); ctx.stroke();
+        stroke('rgba(100,180,255,0.8)', 1.5, x+2,y+2,pw-4,ph-4);
+        break;
+      }
+      /* ── POWER PLANT ── */
+      case 'power_plant': {
+        fill(mc, x+2,y+2,pw-4,ph-4);
+        fill(lt, x+2,y+2,pw-4,5);
+        fill(dk, x+2,y+ph-8,pw-4,6);
+        // energy pipes on sides
+        fill('#2a2800', x+4,y+6,3,ph-10);
+        fill('#2a2800', x+pw-7,y+6,3,ph-10);
+        fill('#eecc00', x+4,y+ph/2-2,3,4);
+        fill('#eecc00', x+pw-7,y+ph/2-2,3,4);
+        // lightning bolt
+        const lbx = x+pw/2, lby = y+ph/2;
+        ctx.strokeStyle = '#ffee00'; ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        ctx.moveTo(lbx+3,lby-9); ctx.lineTo(lbx-3,lby); ctx.lineTo(lbx+2,lby);
+        ctx.lineTo(lbx-3,lby+9); ctx.stroke();
+        // animated glow
+        const gw = 0.3 + 0.2 * Math.sin(this._frame * 0.08);
+        ctx.fillStyle = `rgba(255,230,0,${gw})`;
+        ctx.beginPath(); ctx.arc(lbx,lby,5,0,Math.PI*2); ctx.fill();
+        outline(); break;
+      }
+      /* ── DEFAULT fallback ── */
+      default: {
+        fill(mc, x+2,y+2,pw-4,ph-4);
+        stroke(border, 1.5, x+2,y+2,pw-4,ph-4);
+      }
+    }
+  }
+
+  // ─── UNITS ──────────────────────────────────────────────────
   _drawUnits(ctx, G) {
     for (const u of G.units) {
       if (u.dead) continue;
       const fc = Math.floor(u.row) * COLS + Math.floor(u.col);
       const currentlyVisible = u.faction === 'player' || G.fogLit[fc] === 1;
-      const isGhost = !currentlyVisible && u.faction === 'enemy' && (u.ghostTimer || 0) > 0;
+      const isGhost = !currentlyVisible && u.faction === 'enemy' && (u.ghostTimer||0) > 0;
       if (!currentlyVisible && !isGhost) continue;
 
       const x = u.col * TILE;
       const y = u.row * TILE;
       const def = UNIT_DEF[u.type];
-      const r = (u.type === 'tank' || u.type === 'veil_tank') ? 10 :
-                (u.type === 'drone' || u.type === 'veil_drone') ? 7 :
-                (u.type === 'apc' || u.type === 'artillery' || u.type === 'helicopter') ? 9 : 6;
+      const angle = _getFacing(u);
 
-      // Ghost units render at reduced opacity
       if (isGhost) ctx.globalAlpha = 0.35;
-
-      if (def.flying) {
-        // Draw flying units as diamonds
-        ctx.beginPath();
-        ctx.moveTo(x, y - r);
-        ctx.lineTo(x + r, y);
-        ctx.lineTo(x, y + r);
-        ctx.lineTo(x - r, y);
-        ctx.closePath();
-      } else {
-        ctx.beginPath();
-        ctx.arc(x, y, r, 0, Math.PI * 2);
-      }
-      ctx.fillStyle = def.color;
-      ctx.fill();
-      ctx.strokeStyle = u.faction === 'player' ? '#ffffff' : '#330000';
-      ctx.lineWidth = 1;
-      ctx.stroke();
-
-      // Ghost indicator: question mark above unit
+      this._drawUnitSprite(ctx, u.type, u.faction, x, y, def.color, angle);
       if (isGhost) {
         ctx.globalAlpha = 0.6;
         ctx.fillStyle = '#ffcc44';
         ctx.font = 'bold 10px monospace';
         ctx.textAlign = 'center';
-        ctx.fillText('?', x, y - r - 2);
+        ctx.fillText('?', x, y - 14);
         ctx.textAlign = 'left';
       }
-
       ctx.globalAlpha = 1;
 
-      // directional dot for moving units (only visible ones)
-      if (!isGhost && u.path.length > 0) {
-        const next = u.path[0];
-        const dx = next.col + 0.5 - u.col, dy = next.row + 0.5 - u.row;
-        const len = Math.hypot(dx, dy) || 1;
-        ctx.beginPath();
-        ctx.arc(x + (dx / len) * r * 0.6, y + (dy / len) * r * 0.6, 2, 0, Math.PI * 2);
-        ctx.fillStyle = '#fff';
-        ctx.fill();
+      // Veterancy stars (player units only)
+      if (u.faction === 'player' && u.stars > 0) {
+        ctx.save();
+        ctx.font = '8px monospace';
+        ctx.textAlign = 'center';
+        const starColors = ['', '#d4aa00', '#c8c8c8', '#ffdd44'];
+        ctx.fillStyle = starColors[u.stars];
+        ctx.shadowColor = starColors[u.stars];
+        ctx.shadowBlur = 4;
+        ctx.fillText('★'.repeat(u.stars), x, y - 16);
+        ctx.shadowBlur = 0;
+        ctx.restore();
+      }
+
+      // APC: show passenger count badge
+      if (u.type === 'apc' && u.loadedUnits && u.loadedUnits.length > 0) {
+        ctx.save();
+        ctx.fillStyle = '#44aaff';
+        ctx.font = 'bold 9px monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText(`[${u.loadedUnits.length}]`, x, y - 16);
+        ctx.restore();
+      }
+
+      // Patrol badge — small green cycling arrow
+      if (u.patrolPoints && u.faction === 'player') {
+        ctx.save();
+        ctx.font = 'bold 9px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillStyle = 'rgba(0,255,100,0.9)';
+        ctx.fillText('↺', x, y - (u.stars > 0 ? 26 : 16));
+        ctx.restore();
+      }
+
+      // Follow badge — small blue arrow
+      if (u.followTarget && u.faction === 'player') {
+        ctx.save();
+        ctx.font = 'bold 9px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillStyle = 'rgba(100,180,255,0.9)';
+        ctx.fillText('⇝', x, y - (u.stars > 0 ? 26 : 16));
+        ctx.restore();
       }
     }
   }
 
+  _drawUnitSprite(ctx, type, faction, x, y, color, angle) {
+    const isEnemy = faction === 'enemy';
+    const outlineC = isEnemy ? '#660000' : '#1a3a6a';
+    const dk = _darken(color, 0.5);
+    const lt = _lighten(color, 0.4);
+    const shadow = 'rgba(0,0,0,0.32)';
+
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(angle);
+
+    switch (type) {
+      /* ─ INFANTRY ─ */
+      case 'soldier': case 'veil_soldier': case 'veil_raider': {
+        ctx.fillStyle = shadow;
+        ctx.beginPath(); ctx.ellipse(1,3,5,3,0,0,Math.PI*2); ctx.fill();
+        ctx.fillStyle = color; ctx.fillRect(-3,-2,6,7);
+        ctx.fillStyle = dk;
+        ctx.beginPath(); ctx.arc(0,-5,4,0,Math.PI*2); ctx.fill();
+        ctx.fillStyle = color;
+        ctx.beginPath(); ctx.arc(0,-5,3,-Math.PI*0.85,Math.PI*0.1); ctx.fill(); // helmet brim
+        ctx.strokeStyle = dk; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.moveTo(2,0); ctx.lineTo(10,-1); ctx.stroke();
+        ctx.strokeStyle = outlineC; ctx.lineWidth = 0.6; ctx.strokeRect(-3,-2,6,7);
+        // legs
+        ctx.strokeStyle = dk; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.moveTo(-1,5); ctx.lineTo(-2,10); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(2,5); ctx.lineTo(3,10); ctx.stroke();
+        break;
+      }
+      case 'veil_heavy': {
+        ctx.fillStyle = shadow;
+        ctx.beginPath(); ctx.ellipse(1,4,8,4,0,0,Math.PI*2); ctx.fill();
+        ctx.fillStyle = dk; ctx.fillRect(-5,-4,10,10);
+        ctx.fillStyle = color; ctx.fillRect(-4,-3,8,8);
+        ctx.fillStyle = lt; ctx.fillRect(-4,-3,8,3); ctx.fillRect(-4,-3,3,8);
+        ctx.fillStyle = '#330000';
+        ctx.beginPath(); ctx.arc(0,-6,5,0,Math.PI*2); ctx.fill();
+        ctx.strokeStyle = '#222'; ctx.lineWidth = 2.5;
+        ctx.beginPath(); ctx.moveTo(3,-1); ctx.lineTo(13,-2); ctx.stroke();
+        // legs (heavy unit, wider stance)
+        ctx.strokeStyle = dk; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(-2,6); ctx.lineTo(-3,11); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(3,6); ctx.lineTo(4,11); ctx.stroke();
+        break;
+      }
+      case 'engineer': case 'veil_engineer': {
+        ctx.fillStyle = shadow;
+        ctx.beginPath(); ctx.ellipse(1,3,5,3,0,0,Math.PI*2); ctx.fill();
+        ctx.fillStyle = color; ctx.fillRect(-3,-2,6,7);
+        ctx.fillStyle = '#d4aa66';
+        ctx.beginPath(); ctx.arc(0,-4,3,0,Math.PI*2); ctx.fill();
+        ctx.fillStyle = dk;
+        ctx.beginPath(); ctx.arc(0,-5,3.5,-Math.PI,0); ctx.fill(); // hard hat
+        ctx.strokeStyle = '#888'; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(2,1); ctx.lineTo(8,-3); ctx.stroke();
+        ctx.fillStyle = '#888';
+        ctx.beginPath(); ctx.arc(8,-3,2.5,0,Math.PI*2); ctx.fill();
+        // legs
+        ctx.strokeStyle = dk; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.moveTo(-1,5); ctx.lineTo(-2,10); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(2,5); ctx.lineTo(3,10); ctx.stroke();
+        break;
+      }
+      case 'medic': {
+        ctx.fillStyle = shadow;
+        ctx.beginPath(); ctx.ellipse(1,3,5,3,0,0,Math.PI*2); ctx.fill();
+        ctx.fillStyle = '#e8e8e8'; ctx.fillRect(-3,-2,6,7);
+        ctx.fillStyle = '#dd2222'; ctx.fillRect(-1,-1,2,5); ctx.fillRect(-3,1,6,2);
+        ctx.fillStyle = '#d4aa66';
+        ctx.beginPath(); ctx.arc(0,-5,3,0,Math.PI*2); ctx.fill();
+        ctx.fillStyle = '#888';
+        ctx.beginPath(); ctx.arc(0,-6,3,-Math.PI,0); ctx.fill();
+        ctx.fillStyle = '#fff'; ctx.fillRect(-6,0,4,4);
+        ctx.fillStyle = '#dd2222'; ctx.fillRect(-5,1,2,2); ctx.fillRect(-6,1.5,4,1);
+        // legs
+        ctx.strokeStyle = '#aaaaaa'; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.moveTo(-1,5); ctx.lineTo(-2,10); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(2,5); ctx.lineTo(3,10); ctx.stroke();
+        break;
+      }
+      case 'sniper': case 'veil_sniper': {
+        ctx.fillStyle = shadow;
+        ctx.beginPath(); ctx.ellipse(4,2,10,3,0,0,Math.PI*2); ctx.fill();
+        ctx.fillStyle = color; ctx.fillRect(-4,-2,12,4);
+        ctx.fillStyle = dk;
+        ctx.beginPath(); ctx.arc(-2,0,3,0,Math.PI*2); ctx.fill();
+        ctx.strokeStyle = '#444'; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.moveTo(-2,0); ctx.lineTo(17,-1); ctx.stroke();
+        ctx.fillStyle = '#222'; ctx.fillRect(4,-2,4,2); // scope
+        break;
+      }
+      case 'spec_ops': {
+        ctx.fillStyle = shadow;
+        ctx.beginPath(); ctx.ellipse(1,3,5,3,0,0,Math.PI*2); ctx.fill();
+        ctx.fillStyle = '#1a1a2a'; ctx.fillRect(-3,-2,6,7);
+        ctx.fillStyle = color; ctx.fillRect(-2,-1,2,3); ctx.fillRect(1,1,2,2);
+        ctx.fillStyle = '#1a1a22';
+        ctx.beginPath(); ctx.arc(0,-5,3.5,0,Math.PI*2); ctx.fill();
+        ctx.fillStyle = '#aaaacc'; ctx.fillRect(-2,-6,4,1); // eyes
+        ctx.strokeStyle = '#333344'; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(2,0); ctx.lineTo(10,-0.5); ctx.stroke();
+        ctx.fillStyle = '#333344'; ctx.fillRect(4,-1,4,2);
+        // legs
+        ctx.strokeStyle = '#1a1a2a'; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.moveTo(-1,5); ctx.lineTo(-2,10); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(2,5); ctx.lineTo(3,10); ctx.stroke();
+        break;
+      }
+      case 'infiltrator': {
+        ctx.fillStyle = shadow;
+        ctx.beginPath(); ctx.ellipse(1,3,5,3,0,0,Math.PI*2); ctx.fill();
+        ctx.fillStyle = '#2a1a3a'; ctx.fillRect(-3,-2,6,7);
+        ctx.fillStyle = color; ctx.fillRect(-1,0,2,3);
+        ctx.fillStyle = '#1a0a22';
+        ctx.beginPath(); ctx.arc(0,-5,3.5,0,Math.PI*2); ctx.fill();
+        ctx.fillStyle = '#ff4488'; ctx.fillRect(-2,-6,4,1);
+        ctx.strokeStyle = '#440044'; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.moveTo(2,0); ctx.lineTo(10,-1); ctx.stroke();
+        // legs
+        ctx.strokeStyle = '#2a1a3a'; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.moveTo(-1,5); ctx.lineTo(-2,10); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(2,5); ctx.lineTo(3,10); ctx.stroke();
+        break;
+      }
+      case 'veil_scout': {
+        ctx.fillStyle = shadow;
+        ctx.beginPath(); ctx.ellipse(1,2,4,2,0,0,Math.PI*2); ctx.fill();
+        ctx.fillStyle = color; ctx.fillRect(-2,-2,5,6);
+        ctx.fillStyle = dk;
+        ctx.beginPath(); ctx.arc(0,-3,3,0,Math.PI*2); ctx.fill();
+        ctx.strokeStyle = '#551111'; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(2,0); ctx.lineTo(8,0); ctx.stroke();
+        // legs
+        ctx.strokeStyle = dk; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.moveTo(-1,4); ctx.lineTo(-2,9); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(2,4); ctx.lineTo(3,9); ctx.stroke();
+        break;
+      }
+      /* ─ SCOUT VEHICLE ─ */
+      case 'scout_vehicle': {
+        ctx.fillStyle = shadow;
+        ctx.beginPath(); ctx.ellipse(0,5,10,4,0,0,Math.PI*2); ctx.fill();
+        // wheels
+        ctx.fillStyle = '#222';
+        for (const [wx,wy] of [[-6,4],[6,4],[-6,-4],[6,-4]]) {
+          ctx.beginPath(); ctx.arc(wx,wy,3,0,Math.PI*2); ctx.fill();
+          ctx.fillStyle = '#444'; ctx.beginPath(); ctx.arc(wx,wy,1.5,0,Math.PI*2); ctx.fill();
+          ctx.fillStyle = '#222';
+        }
+        ctx.fillStyle = color; ctx.fillRect(-7,-5,14,10);
+        ctx.fillStyle = 'rgba(140,200,255,0.55)'; ctx.fillRect(1,-4,5,4);
+        ctx.strokeStyle = lt; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(-4,-5); ctx.lineTo(-4,-13); ctx.stroke();
+        ctx.strokeStyle = outlineC; ctx.lineWidth = 1; ctx.strokeRect(-7,-5,14,10);
+        break;
+      }
+      /* ─ APC / VEIL TRUCK ─ */
+      case 'apc': case 'veil_truck': {
+        ctx.fillStyle = shadow;
+        ctx.beginPath(); ctx.ellipse(0,6,12,4,0,0,Math.PI*2); ctx.fill();
+        ctx.fillStyle = '#2a2a2a'; ctx.fillRect(-10,-5,4,10); ctx.fillRect(6,-5,4,10);
+        ctx.fillStyle = '#3a3a3a';
+        for (let ti=-4;ti<6;ti+=3) {
+          ctx.fillRect(-10,ti,4,1.5); ctx.fillRect(6,ti,4,1.5);
+        }
+        ctx.fillStyle = color; ctx.fillRect(-6,-5,12,10);
+        ctx.fillStyle = dk; ctx.fillRect(-5,-5,10,3);
+        ctx.fillStyle = lt;
+        ctx.beginPath(); ctx.arc(0,-3,3,0,Math.PI*2); ctx.fill();
+        ctx.strokeStyle = '#333'; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.moveTo(0,-3); ctx.lineTo(8,-5); ctx.stroke();
+        ctx.strokeStyle = outlineC; ctx.lineWidth = 1; ctx.strokeRect(-6,-5,12,10);
+        break;
+      }
+      /* ─ TANK ─ */
+      case 'tank': case 'veil_tank': {
+        ctx.fillStyle = shadow;
+        ctx.beginPath(); ctx.ellipse(0,7,13,5,0,0,Math.PI*2); ctx.fill();
+        // tracks
+        ctx.fillStyle = '#2a2a2a';
+        ctx.fillRect(-11,-7,4,14); ctx.fillRect(7,-7,4,14);
+        ctx.fillStyle = '#3a3a3a';
+        for (let ti=-6;ti<8;ti+=2.5) {
+          ctx.fillRect(-11,ti,4,1.5); ctx.fillRect(7,ti,4,1.5);
+        }
+        ctx.fillStyle = dk; ctx.fillRect(-7,-6,14,12);
+        ctx.fillStyle = color; ctx.fillRect(-6,-5,12,10);
+        ctx.fillStyle = lt; ctx.fillRect(-5,-5,10,3);
+        // turret ring
+        ctx.fillStyle = '#2a2a2a';
+        ctx.beginPath(); ctx.arc(0,0,6,0,Math.PI*2); ctx.fill();
+        ctx.fillStyle = dk; ctx.fillRect(-5,-4,10,8);
+        ctx.fillStyle = color; ctx.fillRect(-4,-3,8,6);
+        // barrel
+        ctx.fillStyle = '#1a1a1a'; ctx.fillRect(3,-1.5,12,3);
+        ctx.fillStyle = '#111'; ctx.fillRect(3,0.5,12,1.5);
+        ctx.fillStyle = lt;
+        ctx.beginPath(); ctx.arc(-1,-1,3,0,Math.PI*2); ctx.fill(); // cupola
+        ctx.strokeStyle = outlineC; ctx.lineWidth = 1.5; ctx.strokeRect(-7,-6,14,12);
+        break;
+      }
+      /* ─ ARTILLERY ─ */
+      case 'artillery': case 'veil_artillery': {
+        ctx.fillStyle = shadow;
+        ctx.beginPath(); ctx.ellipse(0,7,14,5,0,0,Math.PI*2); ctx.fill();
+        ctx.fillStyle = '#2a2a2a';
+        ctx.fillRect(-11,-6,4,12); ctx.fillRect(7,-6,4,12);
+        ctx.fillStyle = '#3a3a3a';
+        for (let ti=-5;ti<7;ti+=2.5) {
+          ctx.fillRect(-11,ti,4,1.5); ctx.fillRect(7,ti,4,1.5);
+        }
+        ctx.fillStyle = dk; ctx.fillRect(-7,-5,14,10);
+        ctx.fillStyle = color; ctx.fillRect(-6,-4,12,8);
+        ctx.fillStyle = dk; ctx.fillRect(-4,-4,8,8);
+        // long barrel
+        ctx.fillStyle = '#1a1a1a'; ctx.fillRect(3,-2,19,4);
+        ctx.fillStyle = '#2a2a2a'; ctx.fillRect(3,-2,19,2);
+        ctx.fillStyle = '#333'; ctx.fillRect(-2,-4,6,8); // breech
+        ctx.strokeStyle = outlineC; ctx.lineWidth = 1.5; ctx.strokeRect(-7,-5,14,10);
+        break;
+      }
+      /* ─ ANTI-AIR ─ */
+      case 'anti_air': {
+        ctx.fillStyle = shadow;
+        ctx.beginPath(); ctx.ellipse(0,5,9,3,0,0,Math.PI*2); ctx.fill();
+        ctx.fillStyle = '#222';
+        for (const [wx,wy] of [[-6,4],[6,4],[-6,-4],[6,-4]]) {
+          ctx.beginPath(); ctx.arc(wx,wy,3,0,Math.PI*2); ctx.fill();
+        }
+        ctx.fillStyle = color; ctx.fillRect(-6,-5,12,10);
+        ctx.fillStyle = lt; ctx.fillRect(-5,-5,10,3);
+        // twin AA guns
+        ctx.strokeStyle = '#333'; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(-2,-2); ctx.lineTo(-2,-14); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(2,-2); ctx.lineTo(2,-14); ctx.stroke();
+        ctx.fillStyle = '#444';
+        ctx.beginPath(); ctx.arc(-2,-13,2.5,0,Math.PI*2); ctx.fill();
+        ctx.beginPath(); ctx.arc(2,-13,2.5,0,Math.PI*2); ctx.fill();
+        ctx.strokeStyle = outlineC; ctx.lineWidth = 1; ctx.strokeRect(-6,-5,12,10);
+        break;
+      }
+      /* ─ VEIL BOMBER ─ suicide ground unit, red explosive vest */
+      case 'veil_bomber': {
+        ctx.fillStyle = shadow;
+        ctx.beginPath(); ctx.ellipse(1,3,5,3,0,0,Math.PI*2); ctx.fill();
+        ctx.fillStyle = '#1a0505'; ctx.fillRect(-3,-2,6,7);   // dark cloak
+        ctx.fillStyle = '#cc1111'; ctx.fillRect(-3,0,6,3);    // red vest band
+        ctx.fillStyle = '#ffaa00';
+        ctx.beginPath(); ctx.arc(-1,0,1.5,0,Math.PI*2); ctx.fill(); // detonator
+        ctx.beginPath(); ctx.arc(2,0,1.5,0,Math.PI*2); ctx.fill();
+        ctx.fillStyle = '#1a0505';
+        ctx.beginPath(); ctx.arc(0,-5,3.5,0,Math.PI*2); ctx.fill(); // dark head
+        ctx.fillStyle = '#cc3311'; ctx.fillRect(-2,-6,4,1);   // red eyes
+        if (this._frame % 4 < 2) { // fuse flicker
+          ctx.fillStyle = '#ffff00';
+          ctx.beginPath(); ctx.arc(3,-1,1.5,0,Math.PI*2); ctx.fill();
+        }
+        // legs
+        ctx.strokeStyle = '#1a0505'; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.moveTo(-1,5); ctx.lineTo(-2,10); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(2,5); ctx.lineTo(3,10); ctx.stroke();
+        break;
+      }
+      /* ─ HELICOPTER ─ */
+      case 'helicopter': {
+        ctx.fillStyle = 'rgba(0,0,0,0.18)';
+        ctx.beginPath(); ctx.ellipse(0,13,12,5,0,0,Math.PI*2); ctx.fill();
+        ctx.fillStyle = dk;
+        ctx.beginPath(); ctx.ellipse(0,0,8,5,0,0,Math.PI*2); ctx.fill();
+        ctx.fillStyle = color;
+        ctx.beginPath(); ctx.ellipse(-1,-1,6,3.5,0,0,Math.PI*2); ctx.fill();
+        ctx.fillStyle = 'rgba(100,185,255,0.7)';
+        ctx.beginPath(); ctx.ellipse(3,-1,4,3,0.3,0,Math.PI*2); ctx.fill();
+        // spinning rotor
+        const ra = (this._frame*0.22)%(Math.PI*2);
+        ctx.strokeStyle = '#2a2a2a'; ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(Math.cos(ra)*14,Math.sin(ra)*14);
+        ctx.lineTo(-Math.cos(ra)*14,-Math.sin(ra)*14); ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(Math.cos(ra+Math.PI/2)*14,Math.sin(ra+Math.PI/2)*14);
+        ctx.lineTo(-Math.cos(ra+Math.PI/2)*14,-Math.sin(ra+Math.PI/2)*14); ctx.stroke();
+        ctx.fillStyle = dk; ctx.fillRect(-14,-2,8,4); // tail boom
+        ctx.strokeStyle = '#444'; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(-14,-4); ctx.lineTo(-14,4); ctx.stroke();
+        ctx.strokeStyle = '#555'; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.moveTo(-6,5); ctx.lineTo(8,5); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(-4,5); ctx.lineTo(-4,3); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(4,5); ctx.lineTo(4,3); ctx.stroke();
+        break;
+      }
+      /* ─ DRONE ─ */
+      case 'drone': case 'veil_drone': {
+        ctx.fillStyle = 'rgba(0,0,0,0.18)';
+        ctx.beginPath(); ctx.ellipse(0,10,8,3,0,0,Math.PI*2); ctx.fill();
+        ctx.strokeStyle = dk; ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        ctx.moveTo(-9,-9); ctx.lineTo(9,9);
+        ctx.moveTo(9,-9); ctx.lineTo(-9,9);
+        ctx.stroke();
+        ctx.strokeStyle = color; ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(-8,-8); ctx.lineTo(8,8);
+        ctx.moveTo(8,-8); ctx.lineTo(-8,8);
+        ctx.stroke();
+        // Spinning propellers at arm tips
+        const pa = (this._frame * 0.35) % (Math.PI * 2);
+        for (const [ptx,pty] of [[-9,-9],[9,9],[9,-9],[-9,9]]) {
+          ctx.fillStyle = '#1a1a1a';
+          ctx.beginPath(); ctx.arc(ptx,pty,2,0,Math.PI*2); ctx.fill();
+          ctx.strokeStyle = '#2a2a2a'; ctx.lineWidth = 2;
+          ctx.beginPath(); ctx.arc(ptx,pty,4,pa,pa+Math.PI*0.7); ctx.stroke();
+          ctx.beginPath(); ctx.arc(ptx,pty,4,pa+Math.PI,pa+Math.PI*1.7); ctx.stroke();
+        }
+        ctx.fillStyle = dk;
+        ctx.beginPath(); ctx.arc(0,0,4,0,Math.PI*2); ctx.fill();
+        ctx.fillStyle = color;
+        ctx.beginPath(); ctx.arc(0,0,3,0,Math.PI*2); ctx.fill();
+        ctx.fillStyle = '#0a0a0a';
+        ctx.beginPath(); ctx.arc(0,0,2,0,Math.PI*2); ctx.fill();
+        ctx.fillStyle = 'rgba(80,140,255,0.85)';
+        ctx.beginPath(); ctx.arc(0,0,1,0,Math.PI*2); ctx.fill();
+        break;
+      }
+      /* ─ HARVESTER ─ */
+      case 'harvester': {
+        ctx.fillStyle = shadow;
+        ctx.beginPath(); ctx.ellipse(0,7,13,5,0,0,Math.PI*2); ctx.fill();
+        // tracks
+        ctx.fillStyle = '#2a2a2a';
+        ctx.fillRect(-11,-6,4,12); ctx.fillRect(7,-6,4,12);
+        ctx.fillStyle = '#3a3a3a';
+        for (let ti=-5;ti<7;ti+=2.5) {
+          ctx.fillRect(-11,ti,4,1.5); ctx.fillRect(7,ti,4,1.5);
+        }
+        // body — wide yellow industrial
+        ctx.fillStyle = dk; ctx.fillRect(-7,-5,14,10);
+        ctx.fillStyle = color; ctx.fillRect(-6,-4,12,8);
+        ctx.fillStyle = lt; ctx.fillRect(-5,-4,10,3);
+        // collection arm
+        ctx.strokeStyle = '#2a2a2a'; ctx.lineWidth = 3;
+        ctx.beginPath(); ctx.moveTo(6,0); ctx.lineTo(13,-4); ctx.stroke();
+        ctx.fillStyle = '#ddaa22';
+        ctx.beginPath(); ctx.arc(13,-4,3,0,Math.PI*2); ctx.fill();
+        // IC indicator — small glowing blue light
+        ctx.fillStyle = 'rgba(80,180,255,0.9)';
+        ctx.beginPath(); ctx.arc(-2,0,2.5,0,Math.PI*2); ctx.fill();
+        ctx.strokeStyle = outlineC; ctx.lineWidth = 1.5; ctx.strokeRect(-7,-5,14,10);
+        break;
+      }
+      /* ─ DEFAULT fallback ─ */
+      default: {
+        ctx.fillStyle = shadow;
+        ctx.beginPath(); ctx.ellipse(1,3,7,4,0,0,Math.PI*2); ctx.fill();
+        ctx.fillStyle = color;
+        ctx.beginPath(); ctx.arc(0,0,6,0,Math.PI*2); ctx.fill();
+        ctx.strokeStyle = outlineC; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.arc(0,0,6,0,Math.PI*2); ctx.stroke();
+        ctx.fillStyle = '#fff';
+        ctx.beginPath(); ctx.arc(5,0,2,0,Math.PI*2); ctx.fill();
+      }
+    }
+    ctx.restore();
+  }
+
+  // ─── FOG ────────────────────────────────────────────────────
   _drawFog(ctx, G) {
-    // Draw fog as black cells with varying opacity
     for (let r = 0; r < ROWS; r++) {
       for (let c = 0; c < COLS; c++) {
         const op = G.fogOpacity[r * COLS + c];
@@ -464,106 +1335,375 @@ class Renderer {
     ctx.globalAlpha = 1;
   }
 
+  // ─── SELECTION ──────────────────────────────────────────────
   _drawSelectionHighlights(ctx, G) {
     for (const e of G.selected) {
-      ctx.strokeStyle = COL.select;
-      ctx.lineWidth = 2;
       if (e.path !== undefined) {
-        // unit
+        // Unit — bright green glow ring
+        ctx.strokeStyle = '#44ff44';
+        ctx.lineWidth = 2;
+        ctx.shadowColor = '#44ff44';
+        ctx.shadowBlur = 7;
         ctx.beginPath();
-        ctx.arc(e.col * TILE, e.row * TILE, 12, 0, Math.PI * 2);
+        ctx.arc(e.col * TILE, e.row * TILE, 13, 0, Math.PI * 2);
         ctx.stroke();
-        // draw path
+        ctx.shadowBlur = 0;
+        // Dashed movement path
         if (e.path.length > 0) {
-          ctx.strokeStyle = 'rgba(232,216,122,0.3)';
+          ctx.strokeStyle = 'rgba(68,255,68,0.28)';
           ctx.lineWidth = 1;
+          ctx.setLineDash([4, 4]);
           ctx.beginPath();
           ctx.moveTo(e.col * TILE, e.row * TILE);
           for (const p of e.path) ctx.lineTo((p.col + 0.5) * TILE, (p.row + 0.5) * TILE);
           ctx.stroke();
+          ctx.setLineDash([]);
         }
       } else {
-        // building
+        // Building
+        ctx.strokeStyle = '#44ff44';
+        ctx.lineWidth = 2;
+        ctx.shadowColor = '#44ff44';
+        ctx.shadowBlur = 8;
         ctx.strokeRect(e.col * TILE + 1, e.row * TILE + 1, e.w * TILE - 2, e.h * TILE - 2);
+        ctx.shadowBlur = 0;
       }
     }
-
-    // sight radius for selected player units/buildings
+    // Sight radius
     for (const e of G.selected) {
       const sight = e.sight || 0;
       if (sight <= 0) continue;
       const cx = (e.col + (e.w ? e.w / 2 : 0)) * TILE;
       const cy = (e.row + (e.h ? e.h / 2 : 0)) * TILE;
-      ctx.strokeStyle = 'rgba(100,200,255,0.2)';
+      ctx.strokeStyle = 'rgba(68,200,255,0.2)';
       ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.arc(cx, cy, sight * TILE, 0, Math.PI * 2);
-      ctx.stroke();
+      ctx.setLineDash([6, 6]);
+      ctx.beginPath(); ctx.arc(cx, cy, sight * TILE, 0, Math.PI * 2); ctx.stroke();
+      ctx.setLineDash([]);
     }
   }
 
+  // ─── HP BARS ────────────────────────────────────────────────
   _drawHpBars(ctx, G) {
     for (const e of [...G.units, ...G.buildings]) {
       if (e.dead) continue;
       const isUnit = e.path !== undefined;
       const fogIdx = isUnit
         ? Math.floor(e.row) * COLS + Math.floor(e.col)
-        : Math.floor(e.row + (e.h || 1) / 2) * COLS + Math.floor(e.col + (e.w || 1) / 2);
+        : Math.floor(e.row + (e.h||1)/2) * COLS + Math.floor(e.col + (e.w||1)/2);
       if (e.faction !== 'player' && G.fog[fogIdx] !== 1) continue;
-
       const pct = e.hp / e.maxHp;
-      if (pct >= 1) continue; // don't show full health
-
-      const x = isUnit ? e.col * TILE - 12 : e.col * TILE + 2;
-      const y = isUnit ? e.row * TILE - 14  : e.row * TILE - 6;
-      const w = isUnit ? 24 : (e.w || 1) * TILE - 4;
-
-      ctx.fillStyle = '#111';
-      ctx.fillRect(x, y, w, 3);
-      ctx.fillStyle = pct > 0.5 ? '#4aff4a' : pct > 0.25 ? '#e8d87a' : '#ff4444';
-      ctx.fillRect(x, y, w * pct, 3);
+      if (pct >= 1) continue;
+      const bx = isUnit ? e.col * TILE - 12 : e.col * TILE + 2;
+      const by = isUnit ? e.row * TILE - 16  : e.row * TILE - 5;
+      const bw = isUnit ? 24 : (e.w||1) * TILE - 4;
+      ctx.fillStyle = '#1a1a1a'; ctx.fillRect(bx, by, bw, 4);
+      ctx.strokeStyle = '#333'; ctx.lineWidth = 0.5; ctx.strokeRect(bx, by, bw, 4);
+      ctx.fillStyle = pct > 0.5 ? '#44cc22' : pct > 0.25 ? '#ccaa22' : '#cc2222';
+      ctx.fillRect(bx + 0.5, by + 0.5, (bw - 1) * pct, 3);
     }
   }
 
+  // ─── PARTICLES ──────────────────────────────────────────────
+  _drawParticles(ctx, G) {
+    for (const p of G.particles) {
+      const alpha = p.life / p.maxLife; // 1=fresh → 0=dead
+      let r = p.r;
+      if (p.type === 'smoke')  r = p.r * (0.4 + (1 - alpha) * 0.6); // smoke grows
+      else if (p.type === 'fire') r = p.r * alpha;                    // fire shrinks
+      if (r < 0.3) continue;
+      ctx.globalAlpha = p.type === 'smoke' ? alpha * 0.55 : alpha;
+      ctx.fillStyle = `rgba(${p.rgb},1)`;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // ─── PROJECTILES ────────────────────────────────────────────
+  _drawProjectiles(ctx, G) {
+    if (!G.projectiles || G.projectiles.length === 0) return;
+    for (const p of G.projectiles) {
+      const dx = p.tx - p.x, dy = p.ty - p.y;
+      const dist = Math.hypot(dx, dy);
+      if (dist < 0.1) continue;
+      const nx = dx / dist, ny = dy / dist;
+      ctx.globalAlpha = 0.9;
+      if (p.type === 'bullet') {
+        // Short yellow line
+        const len = Math.min(dist, p.speed * 0.04);
+        ctx.strokeStyle = '#ffe840';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(p.x, p.y);
+        ctx.lineTo(p.x - nx * len, p.y - ny * len);
+        ctx.stroke();
+      } else if (p.type === 'shell') {
+        // Orange circle
+        ctx.fillStyle = '#ff7700';
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 3, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (p.type === 'missile') {
+        // White dot with small trail
+        ctx.fillStyle = '#ffffff';
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 3.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(200,200,255,0.5)';
+        ctx.lineWidth = 2;
+        const tlen = Math.min(dist, 18);
+        ctx.beginPath();
+        ctx.moveTo(p.x, p.y);
+        ctx.lineTo(p.x - nx * tlen, p.y - ny * tlen);
+        ctx.stroke();
+      }
+    }
+    ctx.globalAlpha = 1;
+    ctx.lineWidth = 1;
+  }
+
+  // ─── MINIMAP ────────────────────────────────────────────────
   _drawMinimap(G) {
     const mctx = this.mctx;
     mctx.clearRect(0, 0, this.mW, this.mH);
     const tw = this.mW / COLS;
     const th = this.mH / ROWS;
-
-    // terrain
     for (let r = 0; r < ROWS; r++) {
       for (let c = 0; c < COLS; c++) {
-        const fogIdx = r * COLS + c;
-        if (G.fogOpacity[fogIdx] > 0.9) { mctx.fillStyle = '#000'; }
-        else if (c < 12) { mctx.fillStyle = '#2a2010'; }
-        else if (c > 27) { mctx.fillStyle = '#1a2a0a'; }
-        else mctx.fillStyle = '#182010';
+        const idx = r * COLS + c;
+        if (G.fogOpacity[idx] > 0.9) { mctx.fillStyle = '#000'; }
+        else if (G.riverTiles.has(idx)) { mctx.fillStyle = '#1c3a5a'; }
+        else if (c < 12) { mctx.fillStyle = '#4a3018'; }
+        else if (c > 27) { mctx.fillStyle = '#305218'; }
+        else               { mctx.fillStyle = '#384818'; }
         mctx.fillRect(c * tw, r * th, tw, th);
       }
     }
-    // buildings
+    for (const idx of G.roads) {
+      const r2 = Math.floor(idx / COLS), c2 = idx % COLS;
+      if (G.fogOpacity[idx] < 0.9) { mctx.fillStyle = '#7a6030'; mctx.fillRect(c2*tw,r2*th,tw,th); }
+    }
     for (const b of G.buildings) {
       if (b.dead) continue;
       const fi = Math.floor(b.row + b.h/2) * COLS + Math.floor(b.col + b.w/2);
       if (b.faction !== 'player' && G.fog[fi] !== 1) continue;
-      const def = BUILDING_DEF[b.type];
-      mctx.fillStyle = def.color;
+      mctx.fillStyle = BUILDING_DEF[b.type].color;
       mctx.fillRect(b.col * tw, b.row * th, b.w * tw, b.h * th);
     }
-    // units
     for (const u of G.units) {
       if (u.dead) continue;
       const fi = Math.floor(u.row) * COLS + Math.floor(u.col);
       if (u.faction !== 'player' && G.fog[fi] !== 1) continue;
-      mctx.fillStyle = UNIT_DEF[u.type].color;
-      mctx.fillRect(u.col * tw - 1, u.row * th - 1, 2, 2);
+      mctx.fillStyle = u.faction === 'player' ? '#44ff44' : '#ff3333';
+      mctx.fillRect(u.col * tw - 1, u.row * th - 1, 2.5, 2.5);
     }
-    // viewport indicator
-    mctx.strokeStyle = 'rgba(255,255,255,0.5)';
+    mctx.strokeStyle = 'rgba(255,255,255,0.55)';
     mctx.lineWidth = 0.5;
     mctx.strokeRect(0, 0, this.mW, this.mH);
   }
+}
+
+// ============================================================
+// SOUND ENGINE — Procedural Web Audio (no external files)
+// ============================================================
+class SoundEngine {
+  constructor() {
+    try {
+      this._ac = new (window.AudioContext || window.webkitAudioContext)();
+      this._master = this._ac.createGain();
+      this._master.gain.value = 0.3;
+      this._master.connect(this._ac.destination);
+      this._ok = true;
+    } catch(e) { this._ok = false; }
+  }
+
+  _resume() { if (this._ac && this._ac.state === 'suspended') this._ac.resume(); }
+
+  _noiseBuf() {
+    const len = this._ac.sampleRate;
+    const buf = this._ac.createBuffer(1, len, this._ac.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+    return buf;
+  }
+
+  // White noise burst filtered to freq, with volume decay over dur seconds
+  _noise(freq, Q, vol, dur, freqEnd) {
+    if (!this._ok) return;
+    this._resume();
+    const ac = this._ac, t = ac.currentTime;
+    const src = ac.createBufferSource();
+    src.buffer = this._noiseBuf();
+    const filt = ac.createBiquadFilter();
+    filt.type = 'bandpass';
+    filt.frequency.setValueAtTime(freq, t);
+    if (freqEnd) filt.frequency.exponentialRampToValueAtTime(freqEnd, t + dur);
+    filt.Q.value = Q;
+    const g = ac.createGain();
+    g.gain.setValueAtTime(vol, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+    src.connect(filt); filt.connect(g); g.connect(this._master);
+    src.start(t); src.stop(t + dur + 0.05);
+  }
+
+  // Oscillator tone with freq sweep and volume decay
+  _tone(freq, vol, dur, freqEnd, shape = 'square') {
+    if (!this._ok) return;
+    this._resume();
+    const ac = this._ac, t = ac.currentTime;
+    const osc = ac.createOscillator();
+    osc.type = shape;
+    osc.frequency.setValueAtTime(freq, t);
+    if (freqEnd) osc.frequency.exponentialRampToValueAtTime(freqEnd, t + dur);
+    const g = ac.createGain();
+    g.gain.setValueAtTime(vol, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+    osc.connect(g); g.connect(this._master);
+    osc.start(t); osc.stop(t + dur + 0.05);
+  }
+
+  // ── Public SFX ──
+  shootInfantry()  { this._noise(1800 + Math.random()*600, 2.5, 0.35, 0.09); }
+  shootVehicle()   { this._noise(700, 1.8, 0.45, 0.13); this._tone(110, 0.25, 0.1, 55); }
+  shootTank()      { this._noise(380, 1.2, 0.75, 0.20); this._tone(75, 0.55, 0.18, 38); }
+  shootArtillery() { this._noise(280, 1.0, 1.0, 0.28, 75); this._tone(55, 0.7, 0.28, 28); }
+  shootAA()        { this._noise(2200, 3, 0.4, 0.06); this._noise(2200, 3, 0.35, 0.06); }
+  hit()            { this._noise(1100, 4, 0.25, 0.05); }
+  explodeSmall()   { this._noise(480, 0.9, 0.85, 0.38, 55); this._tone(95, 0.45, 0.24, 38); }
+  explodeLarge()   { this._noise(320, 0.65, 1.1, 0.65, 38); this._tone(62, 0.75, 0.48, 22); this._tone(38, 0.4, 0.5, 18, 'sawtooth'); }
+  buildPlace()     { this._tone(420, 0.28, 0.07); this._tone(640, 0.18, 0.06); }
+  uiClick()        { this._tone(780, 0.12, 0.04, 580); }
+  alertSound()     { this._tone(860, 0.38, 0.11); this._tone(640, 0.28, 0.11); }
+}
+const SFX = new SoundEngine();
+
+// ============================================================
+// PARTICLE SYSTEM — combat visual effects
+// ============================================================
+
+// Spawn muzzle flash sparks at (px,py) aimed at angle
+function _spawnMuzzle(G, px, py, angle) {
+  for (let i = 0; i < 7; i++) {
+    const a = angle + (Math.random() - 0.5) * 0.9;
+    const spd = 25 + Math.random() * 70;
+    G.particles.push({ x: px, y: py, vx: Math.cos(a)*spd, vy: Math.sin(a)*spd,
+      life: 0.07 + Math.random()*0.06, maxLife: 0.13,
+      r: 1.5 + Math.random()*2.5, rgb: `255,${160+Math.random()*80|0},20`,
+      type: 'spark', grav: 0 });
+  }
+}
+
+// Spawn hit sparks at impact position
+function _spawnHit(G, px, py, isEnemy) {
+  const n = 4 + Math.random()*5|0;
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const spd = 35 + Math.random() * 90;
+    G.particles.push({ x: px, y: py, vx: Math.cos(a)*spd, vy: Math.sin(a)*spd,
+      life: 0.12 + Math.random()*0.18, maxLife: 0.3,
+      r: 1.2 + Math.random()*2, rgb: isEnemy ? '255,70,15' : '255,190,40',
+      type: 'spark', grav: 80 });
+  }
+}
+
+// Spawn full explosion at (px, py) — size: 'small'|'large'
+function _spawnExplosion(G, px, py, size) {
+  const big = size === 'large';
+  const n = big ? 18 : 10;
+  // Fireballs
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const spd = (big ? 65 : 42) + Math.random() * 85;
+    const cols = ['255,80,10', '255,145,20', '255,205,50'];
+    G.particles.push({ x: px+(Math.random()-.5)*10, y: py+(Math.random()-.5)*10,
+      vx: Math.cos(a)*spd, vy: Math.sin(a)*spd,
+      life: 0.28 + Math.random()*0.38, maxLife: 0.66,
+      r: (big ? 7 : 4) + Math.random()*4,
+      rgb: cols[Math.floor(Math.random()*cols.length)],
+      type: 'fire', grav: -18 });
+  }
+  // Smoke puffs
+  const ns = big ? 9 : 5;
+  for (let i = 0; i < ns; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const spd = 12 + Math.random() * 28;
+    G.particles.push({ x: px, y: py, vx: Math.cos(a)*spd, vy: Math.sin(a)*spd - 22,
+      life: 0.55 + Math.random()*0.55, maxLife: 1.1,
+      r: (big ? 9 : 5) + Math.random()*5,
+      rgb: '75,65,55', type: 'smoke', grav: -28 });
+  }
+  // Debris chunks
+  const nd = big ? 11 : 6;
+  for (let i = 0; i < nd; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const spd = 55 + Math.random() * 130;
+    G.particles.push({ x: px, y: py, vx: Math.cos(a)*spd, vy: Math.sin(a)*spd - 35,
+      life: 0.35 + Math.random()*0.35, maxLife: 0.7,
+      r: 1.8 + Math.random()*2.8,
+      rgb: '55,45,35', type: 'debris', grav: 130 });
+  }
+}
+
+// ============================================================
+// PROJECTILE SYSTEM HELPERS
+// ============================================================
+
+// Spawn a traveling projectile for ranged combat
+function _spawnProjectile(G, shooter, target, def, tx, ty) {
+  const projType = def.projType;
+  if (!projType) return false; // no projectile — instant damage fallback
+  const ax = shooter.col * TILE, ay = shooter.row * TILE;
+  G.projectiles.push({
+    x: ax, y: ay,
+    tx: tx * TILE, ty: ty * TILE,
+    damage: def.damage,
+    dmgType: def.dmgType || 'small_arms',
+    splash: def.splash, splashRange: def.splashRange,
+    target,         // ref for on-arrival damage; may die before arrival
+    shooter,        // for kill credit
+    speed: def.projSpeed || 180,
+    type: projType, // 'bullet' | 'shell' | 'missile' | 'laser'
+    life: 3.0,      // failsafe TTL
+  });
+  return true;
+}
+
+// Emit continuous damage smoke/fire from wounded entities
+function _emitDamageSmoke(G, dt) {
+  for (const e of [...G.units, ...G.buildings]) {
+    if (e.dead) continue;
+    const pct = e.hp / e.maxHp;
+    if (pct > 0.5) continue;
+    if (!e._smokeTimer) e._smokeTimer = 0;
+    e._smokeTimer += dt;
+    const rate = pct <= 0.25 ? 0.15 : 0.35;
+    if (e._smokeTimer < rate) continue;
+    e._smokeTimer = 0;
+    const px = (e.col + (e.w ? e.w / 2 : 0)) * TILE;
+    const py = (e.row + (e.h ? e.h / 2 : 0)) * TILE;
+    if (pct <= 0.25) {
+      _spawnHit(G, px, py, e.faction === 'enemy');
+    } else {
+      G.particles.push({
+        x: px + (Math.random() - 0.5) * 8, y: py,
+        vx: (Math.random() - 0.5) * 8, vy: -15 - Math.random() * 10,
+        life: 0.8 + Math.random() * 0.5, maxLife: 1.3,
+        r: 4 + Math.random() * 3, rgb: '160,160,160', type: 'smoke', grav: 0,
+      });
+    }
+  }
+}
+
+// Recompute power balance from all player buildings
+function _calcPower(G) {
+  let total = 0;
+  for (const b of G.buildings) {
+    if (b.dead || b.faction !== 'player' || b.buildProgress < 1) continue;
+    total += BUILDING_DEF[b.type].power || 0;
+  }
+  G.powerLevel = total;
 }
 
 // ============================================================
@@ -585,11 +1725,35 @@ class Game {
   }
 
   _showStartScreen() {
-    document.getElementById('overlay').style.display = 'flex';
-    document.getElementById('start-btn').onclick = () => {
-      document.getElementById('overlay').style.display = 'none';
-      this.start();
-    };
+    const overlay = document.getElementById('overlay');
+    overlay.innerHTML = `
+      <h1>THE CONCEPTION</h1>
+      <h2>Intelligence is your most scarce resource.</h2>
+      <p style="font-size:12px;color:#4a6a38;max-width:520px;text-align:center;line-height:1.8">Select your mission, Commander.</p>
+      <div id="mission-select" style="display:flex;gap:16px;margin:8px 0"></div>
+      <p style="font-size:11px;color:#555">Left-click: select &nbsp;|&nbsp; Shift+click: add to selection &nbsp;|&nbsp; Right-click: move &nbsp;|&nbsp; Shift+right-click: queue waypoint &nbsp;|&nbsp; A+Right-click: attack-move &nbsp;|&nbsp; H: hold &nbsp;|&nbsp; G: garrison APC &nbsp;|&nbsp; Right-click building: set rally &nbsp;|&nbsp; Ctrl+1-5: group &nbsp;|&nbsp; B: build &nbsp;|&nbsp; X: airstrike &nbsp;|&nbsp; Esc: pause</p>
+    `;
+    const ms = overlay.querySelector('#mission-select');
+    for (const mission of MISSION_DATA) {
+      const card = document.createElement('div');
+      card.style.cssText = 'border:1px solid #2a5a18;padding:14px;width:230px;cursor:pointer;background:rgba(0,8,0,0.7);transition:all 0.15s;text-align:left;';
+      card.innerHTML = `
+        <div style="font-size:13px;color:#88ee44;letter-spacing:2px;margin-bottom:6px">MISSION ${mission.id}</div>
+        <div style="font-size:12px;color:#6aaa44;margin-bottom:6px">${mission.title}</div>
+        <div style="font-size:10px;color:#4a6a38;line-height:1.6">${mission.subtitle}</div>
+        <div style="font-size:9px;color:#3a5a28;margin-top:8px;line-height:1.5">${mission.desc}</div>
+        <div style="font-size:9px;color:#ccee44;margin-top:8px">Start IC: ${mission.startIc} &nbsp;|&nbsp; Wave: ${mission.waveInterval}s</div>
+      `;
+      card.onmouseover = () => { card.style.borderColor = '#44ff22'; card.style.background = 'rgba(20,50,10,0.8)'; };
+      card.onmouseout = () => { card.style.borderColor = '#2a5a18'; card.style.background = 'rgba(0,8,0,0.7)'; };
+      card.onclick = () => {
+        _currentMission = mission;
+        overlay.style.display = 'none';
+        this.start();
+      };
+      ms.appendChild(card);
+    }
+    overlay.style.display = 'flex';
   }
 
   start() {
@@ -600,9 +1764,14 @@ class Game {
     UI.resetVoice();
     AI.state.buildIndex = 0;
     AI.state.resources = 500;
-    AI.state.assaultTriggered = false;
     AI.state.heaviesUnlocked = false;
     AI.state.tanksUnlocked = false;
+    AI.state.waveTimer = _currentMission.waveInterval;
+    AI.state.buildQueues = [
+      ['veil_barracks','veil_barracks'],
+      ['armory','tunnel_entrance','rocket_platform','veil_watch_post'],
+      ['veil_depot','veil_workshop','veil_airbase','veil_foundry'],
+    ];
 
     setTimeout(() => UI.voice('game_start'), 500);
     this._lastTime = performance.now();
@@ -628,10 +1797,14 @@ class Game {
     G.elapsedTime += dt;
     if (G.droneCooldown > 0) G.droneCooldown -= dt;
 
+    _calcPower(G);
     this._updateBuildings(dt);
     AI.tick(G, dt);
     this._updateUnits(dt);
+    this._updateProjectiles(dt);
+    _emitDamageSmoke(G, dt);
     this._updateFog();
+    this._updateParticles(dt);
     G._settlementDt = dt;
     this._updateSettlements();
     this._checkWinLose();
@@ -661,8 +1834,9 @@ class Game {
         }
         continue;
       }
-      // radar_station: periodic ping that briefly reveals extra ring around it
+      // radar_station: periodic ping — disabled when grid is underpowered
       if (b.type === 'radar_station') {
+        if (G.powerLevel < 0) { b._pingTimer = 20; continue; } // dark — skip
         b._pingTimer = (b._pingTimer || 0) - dt;
         if (b._pingTimer <= 0) {
           b._pingTimer = 20; // ping every 20 seconds
@@ -695,9 +1869,10 @@ class Game {
           }
         }
       }
-      // training
+      // training — slows by 40% when grid is underpowered
       if (b.trainQueue && b.trainQueue.length > 0) {
-        b.trainTimer -= dt;
+        const powerDrain = G.powerLevel < 0 ? 1 / 1.4 : 1.0;
+        b.trainTimer -= dt * powerDrain;
         if (b.trainTimer <= 0) {
           const uType = b.trainQueue.shift();
           const u = createUnit(uType, b.col + b.w, b.row + b.h - 1, 'player');
@@ -712,9 +1887,18 @@ class Game {
           const commsTowers = G.buildings.filter(
             b2 => b2.type === 'comms_tower' && !b2.dead && b2.buildProgress >= 1).length;
           u.sight += commsTowers;
+          if (G.upgrades.field_comms) u.sight += 1;
+          if (G.upgrades.ghost_protocol && uType === 'spec_ops') u.damage = Math.round(u.damage * 1.25);
+          // Rally point: send to rally if set
+          if (b.rallyPoint) {
+            const rp = b.rallyPoint;
+            const p = _cachedPath(G, Math.floor(u.col), Math.floor(u.row), rp.col, rp.row);
+            if (p) u.path = p;
+          }
           G.units.push(u);
           if (b.trainQueue.length > 0) {
-            b.trainTimer = UNIT_DEF[b.trainQueue[0]].buildTime;
+            const mult = G.upgrades.rapid_training ? 0.8 : 1.0;
+            b.trainTimer = UNIT_DEF[b.trainQueue[0]].buildTime * mult;
           }
         }
       }
@@ -754,17 +1938,174 @@ class Game {
         const tx = next.col + 0.5, ty = next.row + 0.5;
         const dx = tx - u.col, dy = ty - u.row;
         const dist = Math.hypot(dx, dy);
-        const step = u.speed * dt;
+
+        // Terrain speed modifier
+        const tileIdx = Math.floor(u.row) * COLS + Math.floor(u.col);
+        let terrainMult = 1.0;
+        if (G.roads && G.roads.has(tileIdx)) terrainMult = 1.35;          // road: +35%
+        else if (G.features && G.features[tileIdx] === 1) terrainMult = 0.65; // trees: -35%
+        else if (G.features && G.features[tileIdx] === 2) terrainMult = 0.75; // rocks: -25%
+
+        const step = u.speed * terrainMult * dt;
         if (dist <= step) {
           u.col = tx; u.row = ty;
           u.path.shift();
+          // Dequeue next waypoint when path exhausted
+          if (u.path.length === 0 && u.pathQueue && u.pathQueue.length > 0) {
+            const nextWp = u.pathQueue.shift();
+            const p = _cachedPath(G, Math.floor(u.col), Math.floor(u.row), nextWp.col, nextWp.row);
+            if (p) u.path = p;
+          }
+          // Patrol: loop between two waypoints
+          if (u.path.length === 0 && u.patrolPoints && !u.attackTarget) {
+            u.patrolIdx = 1 - (u.patrolIdx || 0);
+            const wp = u.patrolPoints[u.patrolIdx];
+            const p = _cachedPath(G, Math.floor(u.col), Math.floor(u.row), wp.col, wp.row);
+            if (p) u.path = p;
+          }
+          // Dequeue queued attack when path exhausted
+          if (u.path.length === 0 && u._queuedAttack && !u._queuedAttack.dead) {
+            u.attackTarget = u._queuedAttack;
+            u._queuedAttack = null;
+          }
         } else {
           u.col += (dx / dist) * step;
           u.row += (dy / dist) * step;
         }
       }
 
+      // Full boid steering: separation + cohesion + alignment
+      if (!u.holdPosition) {
+        let sepX = 0, sepY = 0;
+        let cohX = 0, cohY = 0, cohN = 0;
+        let aliVx = 0, aliVy = 0, aliN = 0;
+        const SAME_FACTION = u.faction;
+
+        for (const other of G.units) {
+          if (other === u || other.dead || other.faction !== SAME_FACTION) continue;
+          const sdx = u.col - other.col, sdy = u.row - other.row;
+          const sd = Math.hypot(sdx, sdy);
+
+          // Separation (< 0.85 tile)
+          if (sd < 0.85 && sd > 0.01) {
+            const f = (0.85 - sd) * 1.8;
+            sepX += (sdx / sd) * f;
+            sepY += (sdy / sd) * f;
+          }
+
+          // Cohesion + alignment (only within 3 tiles, only moving units in same group)
+          if (sd < 3.0 && sd > 0.01 && other.path.length > 0 && u.path.length > 0) {
+            cohX += other.col; cohY += other.row; cohN++;
+            // Alignment: estimate velocity from path
+            if (other.path.length > 0) {
+              const nx = (other.path[0].col + 0.5) - other.col;
+              const ny = (other.path[0].row + 0.5) - other.row;
+              const nm = Math.hypot(nx, ny);
+              if (nm > 0.01) { aliVx += nx / nm; aliVy += ny / nm; aliN++; }
+            }
+          }
+        }
+
+        // Apply separation
+        u.col += sepX * dt;
+        u.row += sepY * dt;
+
+        // Apply cohesion (gentle drift toward group center, only while moving)
+        if (cohN > 0 && u.path.length > 0) {
+          const cx = cohX / cohN - u.col, cy = cohY / cohN - u.row;
+          const cm = Math.hypot(cx, cy);
+          if (cm > 0.5) { // only pull when drifted >0.5 tiles from center
+            u.col += (cx / cm) * 0.25 * dt;
+            u.row += (cy / cm) * 0.25 * dt;
+          }
+        }
+
+        // Apply alignment (steer toward average heading, only while moving)
+        if (aliN > 0 && u.path.length > 0) {
+          const ax = aliVx / aliN, ay = aliVy / aliN;
+          u.col += ax * 0.12 * dt;
+          u.row += ay * 0.12 * dt;
+        }
+
+        u.col = Math.max(0, Math.min(COLS - 0.5, u.col));
+        u.row = Math.max(0, Math.min(ROWS - 0.5, u.row));
+      }
+
       const def = UNIT_DEF[u.type];
+
+      // Follow command: re-path toward followed unit every 4 steps
+      if (u.followTarget && u.faction === 'player') {
+        const ft = G.units.find(u2 => u2.id === u.followTarget && !u2.dead);
+        if (ft) {
+          const fdist = Math.hypot(ft.col - u.col, ft.row - u.row);
+          if (fdist > 1.5 && u.path.length === 0) {
+            const p = _cachedPath(G, Math.floor(u.col), Math.floor(u.row),
+              Math.floor(ft.col), Math.floor(ft.row));
+            if (p) u.path = p.slice(0, 4);
+          }
+        } else {
+          u.followTarget = null;
+        }
+      }
+
+      // harvester: autonomous seek→harvest→return→unload loop
+      if (def.isHarvester && u.faction === 'player') {
+        if (!u.harvState) u.harvState = 'seeking';
+        if (!u.harvestedIc) u.harvestedIc = 0;
+        const CARRY_MAX = 100;
+
+        if (u.harvState === 'seeking') {
+          // Find nearest intel_cache with IC remaining
+          let bestCache = null, bestDist = Infinity;
+          for (const b of G.buildings) {
+            if (b.type !== 'intel_cache' || b.dead || (b.icRemaining || 0) <= 0) continue;
+            const d = Math.hypot(b.col - u.col, b.row - u.row);
+            if (d < bestDist) { bestDist = d; bestCache = b; }
+          }
+          if (bestCache) {
+            u.harvestTarget = bestCache;
+            const path = _cachedPath(G, Math.floor(u.col), Math.floor(u.row),
+              bestCache.col, bestCache.row);
+            if (path) { u.path = path; u.harvState = 'moving_to_cache'; }
+          }
+        } else if (u.harvState === 'moving_to_cache') {
+          if (u.path.length === 0) {
+            // arrived — check if target still has IC
+            if (u.harvestTarget && !u.harvestTarget.dead && (u.harvestTarget.icRemaining || 0) > 0) {
+              u.harvState = 'harvesting';
+              u.harvestTimer = 0;
+            } else {
+              u.harvState = 'seeking';
+            }
+          }
+        } else if (u.harvState === 'harvesting') {
+          u.harvestTimer += dt;
+          if (u.harvestTimer >= 1.0 && u.harvestTarget && !u.harvestTarget.dead) {
+            const amount = Math.min(10, u.harvestTarget.icRemaining || 0, CARRY_MAX - u.harvestedIc);
+            u.harvestedIc += amount;
+            u.harvestTarget.icRemaining = (u.harvestTarget.icRemaining || 0) - amount;
+            u.harvestTimer = 0;
+            if (u.harvestedIc >= CARRY_MAX || (u.harvestTarget.icRemaining || 0) <= 0) {
+              u.harvState = 'returning';
+              // Path back to command base
+              const cb = G.buildings.find(b => b.type === 'command_base' && !b.dead);
+              if (cb) {
+                const path = _cachedPath(G, Math.floor(u.col), Math.floor(u.row),
+                  cb.col + 1, cb.row + 1);
+                if (path) u.path = path;
+              }
+            }
+          }
+        } else if (u.harvState === 'returning') {
+          if (u.path.length === 0) {
+            // Unload at command base
+            G.ic += u.harvestedIc;
+            u.harvestedIc = 0;
+            u.harvState = 'seeking';
+          }
+        }
+        continue; // harvesters don't auto-attack
+      }
 
       // medic: heal nearby allies
       if (def.healer && u.faction === 'player') {
@@ -776,7 +2117,7 @@ class Game {
         }
       }
 
-      // engineer: repair nearby friendly buildings
+      // engineer: repair nearby friendly buildings + capture neutral/enemy buildings
       if (def.repairTarget && u.faction === 'player') {
         let repaired = false;
         for (const b of G.buildings) {
@@ -785,6 +2126,29 @@ class Game {
             b.hp = Math.min(b.hp + 10 * dt, b.maxHp);
             repaired = true;
             break;
+          }
+        }
+        // Capture logic: walk into neutral/damaged-enemy buildings
+        if (!repaired) {
+          for (const b of G.buildings) {
+            if (b.dead || b.faction === 'player') continue;
+            const dist = Math.hypot(b.col + b.w / 2 - u.col, b.row + b.h / 2 - u.row);
+            if (dist > 1.2) continue;
+            if (b.faction === 'neutral') {
+              b.faction = 'player';
+              G.ic += 50;
+              _spawnHit(G, (b.col + b.w / 2) * TILE, (b.row + b.h / 2) * TILE, false);
+              break;
+            }
+            if (b.faction === 'enemy' && b.hp / b.maxHp < 0.35) {
+              b.faction = 'player';
+              b.hp = Math.round(b.maxHp * 0.25);
+              _markGrid(G.grid, b.col, b.row, b.w, b.h, 1);
+              _invalidatePathCache(G);
+              G.ic += 100;
+              _spawnHit(G, (b.col + b.w / 2) * TILE, (b.row + b.h / 2) * TILE, false);
+              break;
+            }
           }
         }
       }
@@ -816,23 +2180,59 @@ class Game {
           if (!u.holdPosition) u.attackTarget = null;
         } else if (u.attackCooldown <= 0) {
           u.attackCooldown = ATTACK_COOLDOWN;
-          u.attackTarget.hp -= def.damage;
-          // splash for tanks, artillery, bombers
-          if (def.splash && def.splashRange) {
-            for (const other of G.units) {
-              if (other === u.attackTarget || other.dead || other.faction === u.faction) continue;
-              if (Math.hypot(other.col - tx, other.row - ty) <= def.splashRange) {
-                other.hp -= def.damage * 0.5;
+
+          // ── Muzzle flash ──
+          const ax = u.col * TILE, ay = u.row * TILE;
+          const bx2 = tx * TILE, by2 = ty * TILE;
+          const shotAngle = Math.atan2(by2 - ay, bx2 - ax);
+          _spawnMuzzle(G, ax, ay, shotAngle);
+
+          // ── Shoot sound based on unit type ──
+          switch (def.label) {
+            case 'Tank': case 'Veil Tank': SFX.shootTank(); break;
+            case 'Artillery': case 'Veil Artillery': SFX.shootArtillery(); break;
+            case 'Anti-Air': SFX.shootAA(); break;
+            case 'Scout Vehicle': case 'APC': case 'Veil Raider':
+            case 'Veil Troop Truck': SFX.shootVehicle(); break;
+            default: SFX.shootInfantry(); break;
+          }
+
+          // ── Spawn traveling projectile (or instant hit for units without projType) ──
+          const launched = _spawnProjectile(G, u, u.attackTarget, def, tx, ty);
+          if (!launched || def.suicideBomber) {
+            // Instant damage fallback (melee / suicide bombers)
+            const dmgType  = def.dmgType || 'small_arms';
+            const armorCls = (UNIT_DEF[u.attackTarget.type] || BUILDING_DEF[u.attackTarget.type])?.armor || 'structure';
+            const mult = ARMOR_MULT[dmgType]?.[ARMOR_IDX[armorCls]] ?? 1.0;
+            u.attackTarget.hp -= def.damage * mult;
+            _spawnHit(G, bx2, by2, u.attackTarget.faction === 'enemy');
+            if (def.splash && def.splashRange) {
+              _spawnExplosion(G, bx2, by2, def.splashRange >= 2 ? 'large' : 'small');
+              for (const other of G.units) {
+                if (other === u.attackTarget || other.dead || other.faction === u.faction) continue;
+                if (Math.hypot(other.col - tx, other.row - ty) <= def.splashRange) {
+                  const aCls = UNIT_DEF[other.type]?.armor || 'infantry';
+                  const sm = ARMOR_MULT[dmgType]?.[ARMOR_IDX[aCls]] ?? 1.0;
+                  other.hp -= def.damage * 0.5 * sm;
+                }
               }
             }
-          }
-          if (u.attackTarget.hp <= 0) {
-            this._handleDeath(u.attackTarget);
-            u.attackTarget = null;
-          }
-          // suicide bomber dies after attack
-          if (def.suicideBomber) {
-            this._handleDeath(u);
+            if (u.attackTarget.hp <= 0) {
+              if (u.faction === 'player' && u.attackTarget.path !== undefined) {
+                u.kills = (u.kills || 0) + 1;
+                const prevStars = u.stars || 0;
+                u.stars = u.kills >= 20 ? 3 : u.kills >= 10 ? 2 : u.kills >= 5 ? 1 : 0;
+                if (u.stars > prevStars) {
+                  const bonus = [0, 1.10, 1.20, 1.35][u.stars];
+                  u.damage = Math.round(UNIT_DEF[u.type].damage * bonus);
+                  u.maxHp   = Math.round(UNIT_DEF[u.type].hp    * (1 + (u.stars - 1) * 0.08));
+                  u.hp = Math.min(u.hp + 20, u.maxHp);
+                }
+              }
+              this._handleDeath(u.attackTarget);
+              u.attackTarget = null;
+            }
+            if (def.suicideBomber) this._handleDeath(u);
           }
         }
       }
@@ -895,8 +2295,20 @@ class Game {
     entity.dead = true;
     entity.hp = 0;
 
+    // ── Death explosion particles + sound ──
+    const isBuilding = entity.w !== undefined;
+    const ex = (entity.col + (isBuilding ? entity.w / 2 : 0)) * TILE;
+    const ey = (entity.row + (isBuilding ? entity.h / 2 : 0)) * TILE;
+    if (isBuilding) {
+      _spawnExplosion(G, ex, ey, 'large');
+      SFX.explodeLarge();
+    } else {
+      _spawnExplosion(G, ex, ey, 'small');
+      SFX.explodeSmall();
+    }
+
     // Remove from grid if building
-    if (entity.w !== undefined) {
+    if (isBuilding) {
       _markGrid(G.grid, entity.col, entity.row, entity.w, entity.h, 0);
       _invalidatePathCache(G);
     }
@@ -1022,6 +2434,85 @@ class Game {
     }
   }
 
+  _updateParticles(dt) {
+    const p = this.G.particles;
+    for (let i = p.length - 1; i >= 0; i--) {
+      const pt = p[i];
+      pt.life -= dt;
+      if (pt.life <= 0) { p.splice(i, 1); continue; }
+      pt.x += pt.vx * dt;
+      pt.y += pt.vy * dt;
+      if (pt.grav) pt.vy += pt.grav * dt;
+      pt.vx *= 0.97;
+      pt.vy *= 0.97;
+    }
+  }
+
+  _updateProjectiles(dt) {
+    const G = this.G;
+    const projs = G.projectiles;
+    for (let i = projs.length - 1; i >= 0; i--) {
+      const p = projs[i];
+      p.life -= dt;
+      if (p.life <= 0) { projs.splice(i, 1); continue; }
+
+      const dx = p.tx - p.x, dy = p.ty - p.y;
+      const dist = Math.hypot(dx, dy);
+      const step = p.speed * dt;
+
+      if (dist <= step + 4) {
+        // Arrived — apply damage
+        projs.splice(i, 1);
+        if (!p.target || p.target.dead) continue; // target died already
+
+        const dmgType  = p.dmgType || 'small_arms';
+        const armorCls = (UNIT_DEF[p.target.type] || BUILDING_DEF[p.target.type])?.armor || 'structure';
+        const mult = ARMOR_MULT[dmgType]?.[ARMOR_IDX[armorCls]] ?? 1.0;
+        p.target.hp -= p.damage * mult;
+
+        _spawnHit(G, p.tx, p.ty, p.target.faction === 'enemy');
+
+        // Splash
+        if (p.splash && p.splashRange) {
+          _spawnExplosion(G, p.tx, p.ty, p.splashRange >= 2 ? 'large' : 'small');
+          const tcol = p.tx / TILE, trow = p.ty / TILE;
+          for (const other of G.units) {
+            if (other === p.target || other.dead || other.faction === p.shooter.faction) continue;
+            if (Math.hypot(other.col - tcol, other.row - trow) <= p.splashRange) {
+              const aCls = UNIT_DEF[other.type]?.armor || 'infantry';
+              const sm = ARMOR_MULT[dmgType]?.[ARMOR_IDX[aCls]] ?? 1.0;
+              other.hp -= p.damage * 0.5 * sm;
+              if (other.hp <= 0 && !other.dead) this._handleDeath(other);
+            }
+          }
+        }
+
+        // Kill check
+        if (p.target.hp <= 0 && !p.target.dead) {
+          // Veterancy kill credit
+          const shooter = p.shooter;
+          if (shooter && !shooter.dead && shooter.faction === 'player' && p.target.path !== undefined) {
+            shooter.kills = (shooter.kills || 0) + 1;
+            const prevStars = shooter.stars || 0;
+            shooter.stars = shooter.kills >= 20 ? 3 : shooter.kills >= 10 ? 2 : shooter.kills >= 5 ? 1 : 0;
+            if (shooter.stars > prevStars) {
+              const bonus = [0, 1.10, 1.20, 1.35][shooter.stars];
+              shooter.damage = Math.round(UNIT_DEF[shooter.type].damage * bonus);
+              shooter.maxHp  = Math.round(UNIT_DEF[shooter.type].hp * (1 + (shooter.stars - 1) * 0.08));
+              shooter.hp = Math.min(shooter.hp + 20, shooter.maxHp);
+            }
+          }
+          this._handleDeath(p.target);
+          if (p.shooter && p.shooter.attackTarget === p.target) p.shooter.attackTarget = null;
+        }
+      } else {
+        // Move toward target
+        p.x += (dx / dist) * step;
+        p.y += (dy / dist) * step;
+      }
+    }
+  }
+
   _updateSettlements() {
     const G = this.G;
     const dt = G._settlementDt || 0; // passed from _update via G
@@ -1127,6 +2618,7 @@ class Game {
     const G = this.G;
     UI.updateResource(G.ic);
     UI.updateTimer(G.elapsedTime);
+    UI.updatePower(G.powerLevel);
     const settlements = G.buildings.filter(b => b.type === 'settlement');
     UI.updateSettlementHps(settlements);
     UI.updateGroups(G.groups, G.units);
@@ -1199,19 +2691,32 @@ class Game {
       const x2 = Math.max(this._boxStart.x, pos.x);
       const y1 = Math.min(this._boxStart.y, pos.y);
       const y2 = Math.max(this._boxStart.y, pos.y);
-      const selected = this.G.units.filter(u =>
+      const inBox = this.G.units.filter(u =>
         !u.dead && u.faction === 'player' &&
         u.col * TILE >= x1 && u.col * TILE <= x2 &&
         u.row * TILE >= y1 && u.row * TILE <= y2
       );
-      this.G.selected = selected;
+      if (e.shiftKey) {
+        // Shift+drag: add to existing selection (no duplicates)
+        const ids = new Set(this.G.selected.map(s => s.id));
+        for (const u of inBox) if (!ids.has(u.id)) this.G.selected.push(u);
+      } else {
+        this.G.selected = inBox;
+      }
     } else {
       // Single click — check unit then building
       const clicked = this._entityAt(pos.col, pos.row);
       if (clicked) {
-        this.G.selected = [clicked];
+        if (e.shiftKey) {
+          // Shift+click: toggle in/out of selection
+          const idx = this.G.selected.indexOf(clicked);
+          if (idx === -1) this.G.selected = [...this.G.selected, clicked];
+          else this.G.selected = this.G.selected.filter((_, i) => i !== idx);
+        } else {
+          this.G.selected = [clicked];
+        }
       } else {
-        this.G.selected = [];
+        if (!e.shiftKey) this.G.selected = [];
       }
     }
 
@@ -1254,19 +2759,45 @@ class Game {
     }
 
     const playerUnits = G.selected.filter(u => u.path !== undefined && u.faction === 'player' && !u.dead);
+
+    // Rally point: if a building is the only selected entity, set its rally point
+    const selBuildings = G.selected.filter(b => b.w !== undefined && b.faction === 'player' && !b.dead);
+    if (selBuildings.length > 0 && playerUnits.length === 0) {
+      for (const b of selBuildings) {
+        b.rallyPoint = { col: pos.col, row: pos.row };
+      }
+      // Visual flash at rally target
+      _spawnHit(G, pos.col * TILE + TILE / 2, pos.row * TILE + TILE / 2, false);
+      SFX.uiClick();
+      return;
+    }
+
     if (playerUnits.length === 0) return;
 
     // Check if right-clicking on an enemy entity to attack
     const target = this._entityAt(pos.col, pos.row);
     if (target && target.faction === 'enemy') {
       for (const u of playerUnits) {
-        u.attackTarget = target;
-        u.path = [];
-        u.holdPosition = false;
-        u.attackMoveTarget = null;
+        if (e.shiftKey) {
+          // Queue: finish current path then attack
+          u._queuedAttack = target;
+        } else {
+          u.attackTarget = target;
+          u.path = [];
+          u.holdPosition = false;
+          u.attackMoveTarget = null;
+        }
       }
       return;
     }
+
+    // Check right-click on friendly APC to unload garrisoned units
+    const clickedFriendly = this._entityAt(pos.col, pos.row);
+    if (clickedFriendly && clickedFriendly.faction === 'player' && clickedFriendly.type === 'apc') {
+      this._unloadAPC(clickedFriendly, pos.col, pos.row);
+      return;
+    }
+
     if (G.attackMoveMode) {
       for (let i = 0; i < playerUnits.length; i++) {
         const u = playerUnits[i];
@@ -1285,15 +2816,27 @@ class Game {
       return;
     }
 
-    // Regular move order (clears hold position)
+    // Regular move order — shift queues, normal clears
     let anyMoved = false;
     for (let i = 0; i < playerUnits.length; i++) {
       const u = playerUnits[i];
       const offset = _formationOffset(i);
       const tc = Math.max(0, Math.min(COLS - 1, pos.col + offset.dc));
       const tr = Math.max(0, Math.min(ROWS - 1, pos.row + offset.dr));
-      const p = _cachedPath(G, Math.floor(u.col), Math.floor(u.row), tc, tr);
-      if (p) { u.path = p; u.attackTarget = null; u.holdPosition = false; u.attackMoveTarget = null; anyMoved = true; }
+      if (e.shiftKey) {
+        // Shift+right-click: queue a waypoint after the current path
+        if (!u.pathQueue) u.pathQueue = [];
+        u.pathQueue.push({ col: tc, row: tr });
+        anyMoved = true;
+      } else {
+        const p = _cachedPath(G, Math.floor(u.col), Math.floor(u.row), tc, tr);
+        if (p) {
+          u.path = p; u.attackTarget = null; u.holdPosition = false;
+          u.attackMoveTarget = null; u.pathQueue = [];
+          u.patrolPoints = null; u.followTarget = null; // cancel patrol/follow
+          anyMoved = true;
+        }
+      }
     }
     if (!anyMoved && playerUnits.length > 0) {
       UI.flashResourceRed(); // no path found — flash HUD as feedback
@@ -1366,6 +2909,76 @@ class Game {
             u.holdPosition = true;
             u.path = [];
             u.attackMoveTarget = null;
+          }
+        }
+        break;
+      case 'g': case 'G':
+        if (G.gameState === 'playing') {
+          // Load selected infantry into selected APC (or nearest APC)
+          const selectedApc = G.selected.find(u => !u.dead && u.type === 'apc' && u.faction === 'player');
+          if (selectedApc) {
+            this._loadIntoAPC(selectedApc);
+          } else {
+            // Find nearest friendly APC to any selected unit
+            const anyUnit = G.selected.find(u => !u.dead && u.faction === 'player');
+            if (anyUnit) {
+              const nearApc = G.units.find(u => !u.dead && u.type === 'apc' && u.faction === 'player' &&
+                Math.hypot(u.col - anyUnit.col, u.row - anyUnit.row) <= 2.5);
+              if (nearApc) this._loadIntoAPC(nearApc);
+            }
+          }
+        }
+        break;
+      case 'p': case 'P':
+        if (G.gameState === 'playing') {
+          // Patrol: toggle between current position and the last queued waypoint
+          const patrolUnits = G.selected.filter(u => u.faction === 'player' && !u.dead && u.path !== undefined);
+          for (const u of patrolUnits) {
+            if (u.patrolPoints) {
+              // Cancel patrol
+              u.patrolPoints = null;
+              u.patrolIdx = 0;
+            } else if (u.pathQueue && u.pathQueue.length > 0) {
+              // Set patrol between current position and first queued waypoint
+              const wp = u.pathQueue[0];
+              u.patrolPoints = [
+                { col: Math.floor(u.col), row: Math.floor(u.row) },
+                { col: wp.col, row: wp.row },
+              ];
+              u.patrolIdx = 0;
+              u.pathQueue = [];
+              u.path = [];
+              // Kick off first leg immediately
+              const p = _cachedPath(G, Math.floor(u.col), Math.floor(u.row), wp.col, wp.row);
+              if (p) u.path = p;
+            }
+          }
+        }
+        break;
+      case 'f': case 'F':
+        if (G.gameState === 'playing') {
+          // Follow: selected units follow the clicked/hovered unit
+          // Toggle: if already following, cancel
+          const followSel = G.selected.filter(u => u.faction === 'player' && !u.dead && u.path !== undefined);
+          // If all already following same target, cancel
+          const allFollowing = followSel.every(u => u.followTarget);
+          if (allFollowing && followSel.length > 0) {
+            for (const u of followSel) { u.followTarget = null; }
+          } else {
+            // Find the nearest non-selected friendly unit to the selection center
+            if (followSel.length > 0) {
+              const cx = followSel.reduce((s, u) => s + u.col, 0) / followSel.length;
+              const cy = followSel.reduce((s, u) => s + u.row, 0) / followSel.length;
+              const selIds = new Set(followSel.map(u => u.id));
+              const leader = G.units.find(u2 => !u2.dead && u2.faction === 'player' && !selIds.has(u2.id) &&
+                Math.hypot(u2.col - cx, u2.row - cy) <= 4);
+              if (leader) {
+                for (const u of followSel) {
+                  u.followTarget = leader.id;
+                  u.patrolPoints = null;
+                }
+              }
+            }
           }
         }
         break;
@@ -1457,6 +3070,7 @@ class Game {
     G.ic -= def.cost;
     const b = createBuilding(type, col, row, 'player');
     G.buildings.push(b);
+    SFX.buildPlace();
     // mark grid immediately to prevent overlap during construction
     _markGrid(G.grid, col, row, w, h, 1);
     _invalidatePathCache(G);
@@ -1487,7 +3101,8 @@ class Game {
     G.ic -= actualCost;
     building.trainQueue.push(uType);
     if (building.trainQueue.length === 1) {
-      building.trainTimer = def.buildTime;
+      const trainMult = G.upgrades.rapid_training ? 0.8 : 1.0;
+      building.trainTimer = def.buildTime * trainMult;
     }
     UI.updateSelectionInfo(G.selected, G);
   }
@@ -1500,6 +3115,43 @@ class Game {
     upg.apply(G);
     UI.updateSelectionInfo(G.selected, G);
     if (upg.id === 'emergency_airstrike') UI.voice('airstrike_ready');
+  }
+
+  // APC garrison: load nearby infantry into selected/clicked APC
+  _loadIntoAPC(apc) {
+    const G = this.G;
+    const CAPACITY = 3;
+    if (!apc || apc.type !== 'apc' || apc.dead) return;
+    if (apc.loadedUnits.length >= CAPACITY) return;
+    // Load selected infantry units within 2 tiles
+    const infantry = G.selected.filter(u =>
+      u !== apc && !u.dead && u.faction === 'player' && !u.path?.includes && // not another apc
+      UNIT_DEF[u.type] && !UNIT_DEF[u.type].flying && u.type !== 'apc' && u.type !== 'harvester' &&
+      Math.hypot(u.col - apc.col, u.row - apc.row) <= 2.5
+    );
+    const toLoad = infantry.slice(0, CAPACITY - apc.loadedUnits.length);
+    for (const u of toLoad) {
+      u.dead = true; // remove from world — stored inside APC
+      apc.loadedUnits.push({ type: u.type, hp: u.hp, maxHp: u.maxHp, damage: u.damage, kills: u.kills, stars: u.stars });
+    }
+    if (toLoad.length) SFX.uiClick();
+  }
+
+  _unloadAPC(apc, col, row) {
+    const G = this.G;
+    if (!apc || apc.type !== 'apc' || apc.dead || !apc.loadedUnits.length) return;
+    const unloaded = [...apc.loadedUnits];
+    apc.loadedUnits = [];
+    for (let i = 0; i < unloaded.length; i++) {
+      const data = unloaded[i];
+      const uc = Math.max(0, Math.min(COLS - 1, col + i - 1));
+      const ur = Math.max(0, Math.min(ROWS - 1, row));
+      const u = createUnit(data.type, uc, ur, 'player');
+      u.hp = data.hp; u.maxHp = data.maxHp; u.damage = data.damage;
+      u.kills = data.kills || 0; u.stars = data.stars || 0;
+      G.units.push(u);
+    }
+    SFX.uiClick();
   }
 }
 
