@@ -139,9 +139,9 @@ function createGameState() {
       fogLit[r * COLS + c] = 1;
 
   // Zone base colors [R, G, B] — Red Alert military palette
-  const _DIRT = [78, 58, 32];   // enemy zone: warm barren brown
-  const _NEUT = [52, 78, 24];   // neutral: vibrant olive
-  const _GRAS = [48, 92, 22];   // player zone: bright military green
+  const _DIRT = [140, 105, 60];  // enemy zone: warm barren tan
+  const _NEUT = [100, 148, 58];  // neutral: vibrant olive
+  const _GRAS = [82, 172, 58];   // player zone: clear military green
   function _lerp3(a, b, t) {
     return [Math.round(a[0]+(b[0]-a[0])*t), Math.round(a[1]+(b[1]-a[1])*t), Math.round(a[2]+(b[2]-a[2])*t)];
   }
@@ -421,6 +421,7 @@ class Renderer {
 
   // ─── TERRAIN (Isometric) ────────────────────────────────────
   _drawTerrain(ctx, G) {
+    ctx.globalAlpha = 1;
     // Paint back-to-front using diagonal sweep (painter's algorithm)
     for (let d = 0; d < COLS + ROWS - 1; d++) {
       const cStart = Math.max(0, d - ROWS + 1);
@@ -557,6 +558,7 @@ class Renderer {
 
   // ─── BUILDINGS (Isometric 3D) ───────────────────────────────
   _drawBuildings(ctx, G) {
+    ctx.globalAlpha = 1;
     // Depth-sort: back-to-front by col+row
     const sorted = G.buildings.filter(b => !b.dead).sort((a, b) => (a.col + a.row) - (b.col + b.row));
     for (const b of sorted) {
@@ -2180,8 +2182,8 @@ class Game {
       ['veil_depot','veil_workshop','veil_airbase','veil_foundry'],
     ];
 
-    // Show persistent build sidebar
-    UI.showBuildMenu(this.G, (type) => this._enterBuildMode(type));
+    // Register build callbacks — sidebar opens when player presses B
+    UI.initBuildMenu(this.G, (type) => this._enterBuildMode(type));
 
     setTimeout(() => UI.voice('game_start'), 500);
     this._lastTime = performance.now();
