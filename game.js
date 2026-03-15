@@ -139,9 +139,9 @@ function createGameState() {
       fogLit[r * COLS + c] = 1;
 
   // Zone base colors [R, G, B] — Red Alert military palette
-  const _DIRT = [140, 105, 60];  // enemy zone: warm barren tan
-  const _NEUT = [100, 148, 58];  // neutral: vibrant olive
-  const _GRAS = [82, 172, 58];   // player zone: clear military green
+  const _DIRT = [128, 98, 56];   // enemy zone: warm barren tan
+  const _NEUT = [88, 128, 52];   // neutral: military olive
+  const _GRAS = [64, 118, 46];   // player zone: natural military green
   function _lerp3(a, b, t) {
     return [Math.round(a[0]+(b[0]-a[0])*t), Math.round(a[1]+(b[1]-a[1])*t), Math.round(a[2]+(b[2]-a[2])*t)];
   }
@@ -156,7 +156,7 @@ function createGameState() {
       else if (c <= 24) base = _NEUT;
       else if (c <= 28) base = _lerp3(_NEUT, _GRAS, (c - 25) / 4);
       else              base = _GRAS;
-      const noise = (Math.random() * 0.16) - 0.08;
+      const noise = (Math.random() * 0.40) - 0.20;
       const R = Math.max(0, Math.min(255, Math.round(base[0] * (1 + noise))));
       const G = Math.max(0, Math.min(255, Math.round(base[1] * (1 + noise))));
       const B = Math.max(0, Math.min(255, Math.round(base[2] * (1 + noise))));
@@ -353,13 +353,15 @@ class Renderer {
     this.mW = minimapCanvas.width;
     this.mH = minimapCanvas.height;
     this._frame = 0;
+    this._camX = 0;   // camera pan offset X
+    this._camY = 0;   // camera pan offset Y
   }
 
   // ─── ISOMETRIC HELPERS ─────────────────────────────────────
   _isoXY(col, row) {
     return {
-      x: (col - row) * (ISO_W / 2) + ISO_OX,
-      y: (col + row) * (ISO_H / 2) + ISO_OY,
+      x: (col - row) * (ISO_W / 2) + ISO_OX + this._camX,
+      y: (col + row) * (ISO_H / 2) + ISO_OY + this._camY,
     };
   }
 
@@ -647,7 +649,7 @@ class Renderer {
       // Building label on top face
       const cx = (tl.x + br.x) / 2;
       const cy = (tl.y + br.y) / 2 - h;
-      const label = (def.label || b.type).substring(0, 6).toUpperCase();
+      const label = (def.label || b.type).substring(0, 7).toUpperCase();
       ctx.save();
       ctx.font = 'bold 7px monospace';
       ctx.textAlign = 'center';
@@ -2141,6 +2143,7 @@ class Game {
     this._raf = null;
     this._boxStart = null;
     this._isDragging = false;
+    this._keysHeld = new Set();
 
     this._bindEvents();
     this._showStartScreen();
@@ -2198,6 +2201,13 @@ class Game {
     // Register build callbacks — sidebar opens when player presses B
     UI.initBuildMenu(this.G, (type) => this._enterBuildMode(type));
 
+    // Center camera on player base at game start
+    const pb = _currentMission.playerBase;
+    const pbScreenX = (pb.col - pb.row) * (ISO_W / 2) + ISO_OX;
+    const pbScreenY = (pb.col + pb.row) * (ISO_H / 2) + ISO_OY;
+    this.renderer._camX = Math.round(840 - pbScreenX);  // target: 840px from left (center-right)
+    this.renderer._camY = Math.round(360 - pbScreenY);  // target: 360px from top (above HUD)
+
     setTimeout(() => UI.voice('game_start'), 500);
     this._lastTime = performance.now();
     this._loop(this._lastTime);
@@ -2210,6 +2220,15 @@ class Game {
     try {
       if (this.G.gameState === 'playing') {
         this._update(dt);
+      }
+      // Camera pan with arrow keys (240px/s)
+      if (this.G) {
+        const spd = 240 * dt;
+        const k = this._keysHeld;
+        if (k.has('ArrowLeft'))  this.renderer._camX += spd;
+        if (k.has('ArrowRight')) this.renderer._camX -= spd;
+        if (k.has('ArrowUp'))    this.renderer._camY += spd;
+        if (k.has('ArrowDown'))  this.renderer._camY -= spd;
       }
       this.renderer.drawFrame(this.G);
       this._updateHUD();
@@ -3089,7 +3108,8 @@ class Game {
     canvas.addEventListener('mouseup',   (e) => this._onMouseUp(e));
     canvas.addEventListener('contextmenu', (e) => { e.preventDefault(); this._onRightClick(e); });
 
-    document.addEventListener('keydown', (e) => this._onKey(e));
+    document.addEventListener('keydown', (e) => { this._keysHeld.add(e.key); this._onKey(e); });
+    document.addEventListener('keyup',   (e) => this._keysHeld.delete(e.key));
 
     // HUD button fallbacks (work without keyboard focus)
     const fakeKey = (key) => this._onKey({ key, preventDefault: () => {} });
@@ -3105,9 +3125,9 @@ class Game {
     const scaleY = this.canvas.height / rect.height;
     const sx = (e.clientX - rect.left) * scaleX;
     const sy = (e.clientY - rect.top)  * scaleY;
-    // Inverse isometric transform
-    const dx = sx - ISO_OX;
-    const dy = sy - ISO_OY;
+    // Inverse isometric transform (account for camera offset)
+    const dx = sx - ISO_OX - this.renderer._camX;
+    const dy = sy - ISO_OY - this.renderer._camY;
     const col = Math.floor((dx / (ISO_W / 2) + dy / (ISO_H / 2)) / 2);
     const row = Math.floor((dy / (ISO_H / 2) - dx / (ISO_W / 2)) / 2);
     return {
