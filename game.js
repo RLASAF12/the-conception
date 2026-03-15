@@ -257,6 +257,8 @@ function createGameState() {
     aiBuildPhase: 0,
     aiWaveTimer: 0,
     aiLastWaveTime: 0,
+    // Floating damage/text numbers
+    floatTexts: [],
   };
 }
 
@@ -314,6 +316,12 @@ function _isInPlayerTerritory(col, row, G) {
     if (dx * dx + dy * dy <= cr * cr) return true;
   }
   return false;
+}
+
+// Spawn a floating text label at grid position (for damage numbers, etc.)
+function _spawnFloatText(G, col, row, text, color) {
+  if (!G.floatTexts) G.floatTexts = [];
+  G.floatTexts.push({ col, row, text, color: color || '#fff', life: 0.85, maxLife: 0.85, dy: 0 });
 }
 
 // Get unit facing angle from its path
@@ -409,6 +417,7 @@ class Renderer {
     this._drawSelectionHighlights(ctx, G);
     this._drawPlacementCursor(ctx);
     this._drawHpBars(ctx, G);
+    this._drawFloatTexts(ctx, G);
     this._drawMinimap(G);
   }
 
@@ -555,11 +564,22 @@ class Renderer {
           ctx.fillRect(cx + 3, cy - 2, 2, 3);
         }
 
-        // Territory tint — faint green overlay
+        // Territory tint + boundary glow
         if (_isInPlayerTerritory(c, r, G)) {
           this._isoTilePath(ctx, c, r);
           ctx.fillStyle = 'rgba(68,170,34,0.07)';
           ctx.fill();
+          // Boundary glow: highlight edge tiles (adjacent to non-territory tile)
+          const isEdge = (c === 0 || !_isInPlayerTerritory(c - 1, r, G)) ||
+                         (c === COLS - 1 || !_isInPlayerTerritory(c + 1, r, G)) ||
+                         (r === 0 || !_isInPlayerTerritory(c, r - 1, G)) ||
+                         (r === ROWS - 1 || !_isInPlayerTerritory(c, r + 1, G));
+          if (isEdge) {
+            this._isoTilePath(ctx, c, r);
+            ctx.strokeStyle = 'rgba(68,220,68,0.28)';
+            ctx.lineWidth = 1.8;
+            ctx.stroke();
+          }
         }
 
         // Tile grid outline
@@ -645,6 +665,33 @@ class Renderer {
       ctx.strokeStyle = border;
       ctx.lineWidth = 1.2;
       ctx.stroke();
+
+      // Construction scaffold crosshatch on top face
+      if (b.buildProgress < 1) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.moveTo(tl.x, tl.y - h);
+        ctx.lineTo(tr.x, tr.y - h);
+        ctx.lineTo(br.x, br.y - h);
+        ctx.lineTo(bl.x, bl.y - h);
+        ctx.closePath();
+        ctx.clip();
+        ctx.strokeStyle = 'rgba(255,190,60,0.50)';
+        ctx.lineWidth = 1;
+        // Lines parallel to the left iso edge (tl→bl), spaced across the top face
+        const dx2 = tr.x - tl.x, dy2 = (tr.y - h) - (tl.y - h); // row-axis direction
+        const dx1 = bl.x - tl.x, dy1 = (bl.y - h) - (tl.y - h); // col-axis direction
+        const len2 = Math.hypot(dx2, dy2);
+        const steps = Math.max(2, Math.ceil(len2 / 7));
+        for (let si = 0; si <= steps; si++) {
+          const t = si / steps;
+          ctx.beginPath();
+          ctx.moveTo(tl.x + dx2 * t, (tl.y - h) + dy2 * t);
+          ctx.lineTo(tl.x + dx2 * t + dx1, (tl.y - h) + dy2 * t + dy1);
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
 
       // Building label on top face
       const cx = (tl.x + br.x) / 2;
@@ -1888,6 +1935,27 @@ class Renderer {
     ctx.lineWidth = 1;
   }
 
+  // ─── FLOATING DAMAGE NUMBERS ─────────────────────────────
+  _drawFloatTexts(ctx, G) {
+    if (!G.floatTexts || G.floatTexts.length === 0) return;
+    ctx.save();
+    ctx.font = 'bold 11px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    for (const ft of G.floatTexts) {
+      const alpha = Math.min(1, ft.life / ft.maxLife * 2); // quick fade at end
+      const {x, y} = this._isoXY(ft.col, ft.row + ft.dy);
+      const sy = y + ISO_H / 2;
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = 'rgba(0,0,0,0.6)';
+      ctx.fillText(ft.text, x + 1, sy + 1);
+      ctx.fillStyle = ft.color;
+      ctx.fillText(ft.text, x, sy);
+    }
+    ctx.globalAlpha = 1;
+    ctx.restore();
+  }
+
   // ─── MINIMAP ────────────────────────────────────────────────
   _drawMinimap(G) {
     const mctx = this.mctx;
@@ -2156,7 +2224,7 @@ class Game {
       <h2>Intelligence is your most scarce resource.</h2>
       <p style="font-size:12px;color:#4a6a38;max-width:520px;text-align:center;line-height:1.8">Select your mission, Commander.</p>
       <div id="mission-select" style="display:flex;gap:16px;margin:8px 0"></div>
-      <p style="font-size:11px;color:#555">Left-click: select &nbsp;|&nbsp; Shift+click: add to selection &nbsp;|&nbsp; Right-click: move &nbsp;|&nbsp; Shift+right-click: queue waypoint &nbsp;|&nbsp; A+Right-click: attack-move &nbsp;|&nbsp; H: hold &nbsp;|&nbsp; G: garrison APC &nbsp;|&nbsp; Right-click building: set rally &nbsp;|&nbsp; Ctrl+1-5: group &nbsp;|&nbsp; B: build &nbsp;|&nbsp; X: airstrike &nbsp;|&nbsp; Esc: pause</p>
+      <p style="font-size:11px;color:#555">Left-click: select &nbsp;|&nbsp; Shift+click: add to selection &nbsp;|&nbsp; Right-click: move &nbsp;|&nbsp; Shift+right-click: queue waypoint &nbsp;|&nbsp; A+Right-click: attack-move &nbsp;|&nbsp; H: hold &nbsp;|&nbsp; G: garrison APC &nbsp;|&nbsp; Right-click building: set rally &nbsp;|&nbsp; Engineer+Right-click tree/rock: clear terrain &nbsp;|&nbsp; Ctrl+1-5: group &nbsp;|&nbsp; B: build &nbsp;|&nbsp; X: airstrike &nbsp;|&nbsp; Esc: pause</p>
     `;
     const ms = overlay.querySelector('#mission-select');
     for (const mission of MISSION_DATA) {
@@ -2253,6 +2321,7 @@ class Game {
     _emitDamageSmoke(G, dt);
     this._updateFog();
     this._updateParticles(dt);
+    this._updateFloatTexts(dt);
     G._settlementDt = dt;
     this._updateSettlements();
     this._updateBuildingPassives(dt);
@@ -2376,6 +2445,26 @@ class Game {
       if (u.attackMoveTarget && u.path.length === 0 && !u.attackTarget) {
         const d = Math.hypot(u.col - (u.attackMoveTarget.col + 0.5), u.row - (u.attackMoveTarget.row + 0.5));
         if (d < 1.5) u.attackMoveTarget = null;
+      }
+
+      // Engineer terrain-clearing: move to target tile and remove feature
+      if (u.type === 'engineer' && u.clearOrder && u.faction === 'player') {
+        const co = u.clearOrder;
+        const dist = Math.hypot(u.col - (co.col + 0.5), u.row - (co.row + 0.5));
+        if (dist < 1.2) {
+          // Arrived — clear the feature
+          const idx = co.row * COLS + co.col;
+          if (G.features[idx] !== 0) {
+            G.features[idx] = 0;
+            _invalidatePathCache(G);
+            SFX.buildPlace();
+          }
+          u.clearOrder = null;
+        } else if (u.path.length === 0) {
+          const p = _cachedPath(G, Math.floor(u.col), Math.floor(u.row), co.col, co.row);
+          if (p) u.path = p;
+          else u.clearOrder = null; // unreachable
+        }
       }
 
       // Hold position: skip movement, still attack in range
@@ -2653,8 +2742,11 @@ class Game {
             const dmgType  = def.dmgType || 'small_arms';
             const armorCls = (UNIT_DEF[u.attackTarget.type] || BUILDING_DEF[u.attackTarget.type])?.armor || 'structure';
             const mult = ARMOR_MULT[dmgType]?.[ARMOR_IDX[armorCls]] ?? 1.0;
-            u.attackTarget.hp -= def.damage * mult;
-            _spawnHit(G, bx2, by2, u.attackTarget.faction === 'enemy');
+            const dmgAmt = Math.round(def.damage * mult);
+            u.attackTarget.hp -= dmgAmt;
+            const isEnemyTarget = u.attackTarget.faction === 'enemy';
+            _spawnFloatText(G, u.attackTarget.col + (u.attackTarget.w||0)/2, u.attackTarget.row + (u.attackTarget.h||0)/2, `-${dmgAmt}`, isEnemyTarget ? '#ff8844' : '#ff4444');
+            _spawnHit(G, bx2, by2, isEnemyTarget);
             if (def.splash && def.splashRange) {
               _spawnExplosion(G, bx2, by2, def.splashRange >= 2 ? 'large' : 'small');
               for (const other of G.units) {
@@ -2897,6 +2989,16 @@ class Game {
     }
   }
 
+  _updateFloatTexts(dt) {
+    const G = this.G;
+    if (!G.floatTexts) return;
+    for (const ft of G.floatTexts) {
+      ft.life -= dt;
+      ft.dy -= 0.8 * dt; // drift upward in grid row units
+    }
+    G.floatTexts = G.floatTexts.filter(ft => ft.life > 0);
+  }
+
   _updateProjectiles(dt) {
     const G = this.G;
     const projs = G.projectiles;
@@ -2917,9 +3019,12 @@ class Game {
         const dmgType  = p.dmgType || 'small_arms';
         const armorCls = (UNIT_DEF[p.target.type] || BUILDING_DEF[p.target.type])?.armor || 'structure';
         const mult = ARMOR_MULT[dmgType]?.[ARMOR_IDX[armorCls]] ?? 1.0;
-        p.target.hp -= p.damage * mult;
+        const projDmgAmt = Math.round(p.damage * mult);
+        p.target.hp -= projDmgAmt;
 
-        _spawnHit(G, p.tx, p.ty, p.target.faction === 'enemy');
+        const isEnemyHit = p.target.faction === 'enemy';
+        _spawnFloatText(G, p.target.col + (p.target.w||0)/2, p.target.row + (p.target.h||0)/2, `-${projDmgAmt}`, isEnemyHit ? '#ff8844' : '#ff4444');
+        _spawnHit(G, p.tx, p.ty, isEnemyHit);
 
         // Splash
         if (p.splash && p.splashRange) {
@@ -3283,6 +3388,22 @@ class Game {
     if (clickedFriendly && clickedFriendly.faction === 'player' && clickedFriendly.type === 'apc') {
       this._unloadAPC(clickedFriendly, pos.col, pos.row);
       return;
+    }
+
+    // Engineer terrain-clearing: right-click on tree/rock/ruin tile with engineer selected
+    const engineers = playerUnits.filter(u => u.type === 'engineer');
+    if (engineers.length > 0 && G.features) {
+      const featIdx = pos.row * COLS + pos.col;
+      if (G.features[featIdx] !== 0) {
+        for (const u of engineers) {
+          u.clearOrder = { col: pos.col, row: pos.row };
+          u.path = [];
+          u.attackTarget = null;
+          u.holdPosition = false;
+        }
+        SFX.uiClick();
+        return;
+      }
     }
 
     if (G.attackMoveMode) {
