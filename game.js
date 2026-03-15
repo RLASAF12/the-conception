@@ -303,6 +303,19 @@ function _invalidatePathCache(G) {
 // VISUAL HELPERS — Red Alert style rendering utilities
 // ============================================================
 
+// Check if a tile is within control radius of any player building
+function _isInPlayerTerritory(col, row, G) {
+  for (const b of G.buildings) {
+    if (b.faction !== 'player' || b.dead || b.buildProgress < 1) continue;
+    const def = BUILDING_DEF[b.type];
+    const cr = (def && def.controlRadius) || 3;
+    const bcx = b.col + b.w / 2, bcy = b.row + b.h / 2;
+    const dx = col - bcx, dy = row - bcy;
+    if (dx * dx + dy * dy <= cr * cr) return true;
+  }
+  return false;
+}
+
 // Get unit facing angle from its path
 function _getFacing(u) {
   if (u.path && u.path.length > 0) {
@@ -541,7 +554,7 @@ class Renderer {
         }
 
         // Territory tint — faint green overlay
-        if (this._isInPlayerTerritory(c, r, G)) {
+        if (_isInPlayerTerritory(c, r, G)) {
           this._isoTilePath(ctx, c, r);
           ctx.fillStyle = 'rgba(68,170,34,0.07)';
           ctx.fill();
@@ -1885,7 +1898,7 @@ class Renderer {
         if (G.fogOpacity[idx] > 0.9) { mctx.fillStyle = '#000'; }
         else if (G.riverTiles.has(idx)) { mctx.fillStyle = '#1c3a5a'; }
         else if (c < 12) { mctx.fillStyle = '#4a3018'; }
-        else if (c > 27) { mctx.fillStyle = '#305218'; }
+        else if (c >= 27) { mctx.fillStyle = '#305218'; }
         else               { mctx.fillStyle = '#384818'; }
         mctx.fillRect(c * tw, r * th, tw, th);
       }
@@ -3476,15 +3489,7 @@ class Game {
   }
 
   _isInPlayerTerritory(col, row, G) {
-    for (const b of G.buildings) {
-      if (b.faction !== 'player' || b.dead || b.buildProgress < 1) continue;
-      const def = BUILDING_DEF[b.type];
-      const cr = (def && def.controlRadius) || 3;
-      const bcx = b.col + b.w / 2, bcy = b.row + b.h / 2;
-      const dx = col - bcx, dy = row - bcy;
-      if (dx * dx + dy * dy <= cr * cr) return true;
-    }
-    return false;
+    return _isInPlayerTerritory(col, row, G);
   }
 
   _canPlaceAt(col, row, w, h) {
