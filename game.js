@@ -2180,8 +2180,8 @@ class Game {
       ['veil_depot','veil_workshop','veil_airbase','veil_foundry'],
     ];
 
-    // Show persistent build sidebar
-    UI.showBuildMenu(this.G, (type) => this._enterBuildMode(type));
+    // Register build callbacks — sidebar opens when player presses B
+    UI.initBuildMenu(this.G, (type) => this._enterBuildMode(type));
 
     setTimeout(() => UI.voice('game_start'), 500);
     this._lastTime = performance.now();

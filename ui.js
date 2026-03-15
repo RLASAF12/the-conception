@@ -318,6 +318,19 @@ const UI = (() => {
     }
   }
 
+  // Register callbacks and close sidebar — called on game start/restart
+  function initBuildMenu(G, onPlace) {
+    _sidebarG = G;
+    _sidebarOnPlace = onPlace;
+    // Ensure sidebar is closed so player opens it intentionally with B
+    if (sidebar.classList.contains('sidebar-visible')) {
+      sidebar.classList.remove('sidebar-visible');
+      const gc = document.getElementById('game-container');
+      if (gc) gc.classList.remove('sidebar-open');
+      if (sidebarToggle) sidebarToggle.style.right = '0';
+    }
+  }
+
   function showBuildMenu(G, onPlace) {
     _sidebarG = G;
     _sidebarOnPlace = onPlace;
@@ -551,7 +564,7 @@ const UI = (() => {
   return {
     voice, updateResource, flashResourceRed, updateTimer, updatePower,
     updateSettlementHps, triggerAlertFlash,
-    updateSelectionInfo, showBuildMenu, showUpgradePanel,
+    updateSelectionInfo, initBuildMenu, showBuildMenu, showUpgradePanel,
     showPlacementCursor, hidePlacementCursor, resetVoice,
     updateGroups, updateCommandMode, updateDroneCooldown,
   };
