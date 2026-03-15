@@ -407,6 +407,9 @@ class Renderer {
     ctx.globalAlpha = 1;
     ctx.setLineDash([]);
     ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+    // Fill canvas black so off-grid areas are dark, not transparent
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
     this._frame++;
     this._drawTerrain(ctx, G);
     this._drawBuildings(ctx, G);
@@ -693,18 +696,48 @@ class Renderer {
         ctx.restore();
       }
 
-      // Building label on top face
+      // ── Iso-projected building art on top face ──────────────
+      // Uses ctx.setTransform to map the 2D sprite coordinate space
+      // (0,0)→(pw,ph) onto the isometric rhombus top face.
+      if (b.buildProgress >= 1) {
+        ctx.save();
+        // Clip to top-face rhombus to prevent art bleeding outside
+        ctx.beginPath();
+        ctx.moveTo(tl.x, tl.y - h);
+        ctx.lineTo(tr.x, tr.y - h);
+        ctx.lineTo(br.x, br.y - h);
+        ctx.lineTo(bl.x, bl.y - h);
+        ctx.closePath();
+        ctx.clip();
+        // Map pixel (0,0)→top-left, (pw,0)→top-right, (0,ph)→bottom-left
+        const pw = 32, ph = 32;
+        const tlX = tl.x, tlY = tl.y - h;
+        const trX = tr.x, trY = tr.y - h;
+        const blX = bl.x, blY = bl.y - h;
+        ctx.setTransform(
+          (trX - tlX) / pw,  // a — x-axis x component
+          (trY - tlY) / pw,  // b — x-axis y component
+          (blX - tlX) / ph,  // c — y-axis x component
+          (blY - tlY) / ph,  // d — y-axis y component
+          tlX,               // e — origin x
+          tlY                // f — origin y
+        );
+        this._drawBuildingShape(ctx, b.type, b.faction, 0, 0, pw, ph);
+        ctx.restore();
+      }
+
+      // Building label (small, above top face)
       const cx = (tl.x + br.x) / 2;
       const cy = (tl.y + br.y) / 2 - h;
-      const label = (def.label || b.type).substring(0, 7).toUpperCase();
+      const label = (def.label || b.type).substring(0, 6).toUpperCase();
       ctx.save();
-      ctx.font = 'bold 7px monospace';
+      ctx.font = 'bold 6px monospace';
       ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillStyle = 'rgba(0,0,0,0.5)';
-      ctx.fillText(label, cx + 0.5, cy + 0.5);
-      ctx.fillStyle = '#fff';
-      ctx.fillText(label, cx, cy);
+      ctx.textBaseline = 'bottom';
+      ctx.fillStyle = 'rgba(0,0,0,0.55)';
+      ctx.fillText(label, cx + 0.5, cy - 1.5);
+      ctx.fillStyle = isEnemy ? '#ff9999' : '#ccffcc';
+      ctx.fillText(label, cx, cy - 2);
       ctx.restore();
 
       // Faction flag
@@ -1233,88 +1266,31 @@ class Renderer {
 
       if (isGhost) ctx.globalAlpha = 0.35;
 
-      // Token rendering
+      // Full procedural unit sprites (replaces simple token approach)
       const isVehicle = ['scout_vehicle','tank','apc','artillery','harvester','veil_tank','veil_truck','veil_artillery'].includes(u.type);
       const isAir = ['drone','helicopter','veil_drone'].includes(u.type);
       const factionColor = u.faction === 'player' ? '#2266cc' : '#cc2222';
-      const factionLight = u.faction === 'player' ? '#4488ee' : '#ee4444';
-      const flyOff = isAir ? -8 : 0; // air units float above
+      const flyOff = isAir ? -10 : 0; // air units float above ground
 
-      // Ground shadow
-      ctx.fillStyle = 'rgba(0,0,0,0.25)';
+      // Ground shadow — larger and softer than before
+      ctx.fillStyle = 'rgba(0,0,0,0.32)';
       ctx.beginPath();
-      ctx.ellipse(cx + 2, cy + 3, isVehicle ? 9 : 7, isVehicle ? 4 : 3, 0, 0, Math.PI * 2);
+      ctx.ellipse(cx + 2, cy + 4, isVehicle ? 14 : isAir ? 11 : 10, isVehicle ? 6 : 4.5, 0, 0, Math.PI * 2);
       ctx.fill();
 
       const ty = cy + flyOff;
-      const r = isVehicle ? 10 : isAir ? 8 : 7;
 
-      if (isAir) {
-        // Hexagonal token for air units
-        ctx.beginPath();
-        for (let i = 0; i < 6; i++) {
-          const a = Math.PI / 6 + i * Math.PI / 3;
-          const px = cx + r * Math.cos(a), py = ty + r * 0.7 * Math.sin(a);
-          i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
-        }
-        ctx.closePath();
-        ctx.fillStyle = factionColor;
-        ctx.fill();
-        ctx.strokeStyle = factionLight;
-        ctx.lineWidth = 1.5;
-        ctx.stroke();
-        // Propeller animation for drones
-        if (u.type === 'drone' || u.type === 'veil_drone') {
-          const pa = (this._frame * 0.4) % (Math.PI * 2);
-          ctx.strokeStyle = 'rgba(200,200,200,0.5)';
-          ctx.lineWidth = 1;
-          for (let i = 0; i < 4; i++) {
-            const a = pa + i * Math.PI / 2;
-            ctx.beginPath();
-            ctx.arc(cx, ty, r - 2, a, a + 0.8);
-            ctx.stroke();
-          }
-        }
-      } else if (isVehicle) {
-        // Rounded rectangle token for vehicles
-        const rw = 14, rh = 10, rr = 3;
-        ctx.beginPath();
-        ctx.moveTo(cx - rw/2 + rr, ty - rh/2);
-        ctx.lineTo(cx + rw/2 - rr, ty - rh/2);
-        ctx.quadraticCurveTo(cx + rw/2, ty - rh/2, cx + rw/2, ty - rh/2 + rr);
-        ctx.lineTo(cx + rw/2, ty + rh/2 - rr);
-        ctx.quadraticCurveTo(cx + rw/2, ty + rh/2, cx + rw/2 - rr, ty + rh/2);
-        ctx.lineTo(cx - rw/2 + rr, ty + rh/2);
-        ctx.quadraticCurveTo(cx - rw/2, ty + rh/2, cx - rw/2, ty + rh/2 - rr);
-        ctx.lineTo(cx - rw/2, ty - rh/2 + rr);
-        ctx.quadraticCurveTo(cx - rw/2, ty - rh/2, cx - rw/2 + rr, ty - rh/2);
-        ctx.closePath();
-        ctx.fillStyle = factionColor;
-        ctx.fill();
-        ctx.strokeStyle = factionLight;
-        ctx.lineWidth = 1.5;
-        ctx.stroke();
-      } else {
-        // Circular token for infantry
-        ctx.beginPath();
-        ctx.arc(cx, ty, r, 0, Math.PI * 2);
-        ctx.fillStyle = factionColor;
-        ctx.fill();
-        ctx.strokeStyle = factionLight;
-        ctx.lineWidth = 1.5;
-        ctx.stroke();
-      }
+      // Draw the detailed procedural sprite at the iso position
+      const angle = _unitAngle(u);
+      const spriteScale = isVehicle ? 1.08 : isAir ? 1.0 : 0.96;
+      ctx.save();
+      ctx.translate(cx, ty);
+      ctx.scale(spriteScale, spriteScale);
+      this._drawUnitSprite(ctx, u.type, u.faction, 0, 0, factionColor, angle);
+      ctx.restore();
 
-      // Inner highlight gradient
-      const grad = ctx.createRadialGradient(cx - 2, ty - 2, 0, cx, ty, r);
-      grad.addColorStop(0, 'rgba(255,255,255,0.25)');
-      grad.addColorStop(1, 'rgba(0,0,0,0.15)');
-      ctx.fillStyle = grad;
-      ctx.beginPath();
-      ctx.arc(cx, ty, r - 1, 0, Math.PI * 2);
-      ctx.fill();
-
-      // Type abbreviation label
+      // Keep a small badge for quick unit identification (on top of sprite)
+      const r = isVehicle ? 13 : isAir ? 11 : 10; // radius used for badge/selection ring position
       const badge = { soldier:'SL', scout_vehicle:'SC', tank:'TK', spec_ops:'SO',
         engineer:'EN', medic:'MD', sniper:'SN', apc:'AP', artillery:'AT',
         harvester:'HV', anti_air:'AA', drone:'DR', helicopter:'HE',
@@ -1322,11 +1298,13 @@ class Renderer {
         veil_scout:'SC', veil_sniper:'SN', veil_engineer:'VE', veil_artillery:'VA',
         veil_bomber:'VB', veil_truck:'VT', veil_drone:'VD', veil_tank:'VK' }[u.type] || '??';
       ctx.save();
-      ctx.font = 'bold 7px monospace';
+      ctx.font = 'bold 6px monospace';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillStyle = '#fff';
-      ctx.fillText(badge, cx, ty);
+      ctx.fillStyle = 'rgba(0,0,0,0.6)';
+      ctx.fillText(badge, cx + 0.5, ty - r - 3.5);
+      ctx.fillStyle = u.faction === 'player' ? '#88ccff' : '#ffaa88';
+      ctx.fillText(badge, cx, ty - r - 4);
       ctx.restore();
 
       // Ghost indicator
